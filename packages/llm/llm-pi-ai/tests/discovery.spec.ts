@@ -173,6 +173,24 @@ describe('draft-provider model discovery', () => {
     ])
   })
 
+  it('reads a listing that is the entry array itself, with no envelope', async () => {
+    // Some OpenAI-compatible gateways answer `GET /models` with the entry
+    // array directly instead of the standard `{"data": [...]}` reply.
+    const server = await listingServer({
+      body: JSON.stringify([
+        { id: 'acme-large', name: 'Acme Large', context_length: 65_536, max_output_tokens: 4096 },
+        { id: 'acme-unusable-capacity', contextWindow: 0, maxTokens: -1 },
+        { id: '' },
+      ]),
+    })
+    const ctx = await harness()
+
+    expect(await ctx.llm.discoverModels('llm-pi-ai', { baseURL: server.url })).toEqual([
+      { id: 'acme-large', name: 'Acme Large', contextWindow: 65_536, maxTokens: 4096 },
+      { id: 'acme-unusable-capacity', name: 'acme-unusable-capacity' },
+    ])
+  })
+
   it('uses Anthropic model-listing paths, headers, and capacity fields', async () => {
     const server = await listingServer({
       body: JSON.stringify({
@@ -349,7 +367,7 @@ describe('draft-provider model discovery', () => {
     const ctx = await harness()
 
     await expect(ctx.llm.discoverModels('llm-pi-ai', { baseURL: server.url }))
-      .rejects.toThrow(/neither a "data" array nor a "models" object/)
+      .rejects.toThrow(/neither a "data" array, a top-level entry array, nor a "models" object/)
 
     const broken = await listingServer({ body: 'not json at all' })
     await expect(ctx.llm.discoverModels('llm-pi-ai', { baseURL: broken.url }))
