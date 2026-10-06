@@ -15,9 +15,10 @@
  *
  * OpenAI-compatible and Anthropic Messages protocols are interrogated through
  * their native model-listing endpoints. The parser accepts the standard
- * `data` array and the enriched `models` map some compatible gateways expose.
- * Every other protocol reports that it cannot be interrogated so the surface
- * falls back to hand-entry rather than guessing its response fields.
+ * `data` array, a top-level entry array, and the enriched `models` map some
+ * compatible gateways expose. Every other protocol reports that it cannot be
+ * interrogated so the surface falls back to hand-entry rather than guessing
+ * its response fields.
  *
  * @module dsh-llm-pi-ai/discovery
  */
@@ -166,12 +167,14 @@ async function readBounded(response: Response, url: string): Promise<string> {
 
 /**
  * Read one supported model-listing reply. The standard `data` array takes
- * precedence when both supported formats are present. An enriched `models`
- * map uses each property key as the endpoint-facing id; its nested `id` is
- * only a fallback for an empty key because gateways may put a canonical model
- * identity there instead of the alias they accept on requests. Only
- * object-valued map entries are models; primitive properties are ignored
- * because they may be directory metadata rather than model records.
+ * precedence when multiple supported formats are present. A reply that is
+ * the entry array itself — a gateway answering with no envelope — is read the
+ * same way. An enriched `models` map uses each property key as the
+ * endpoint-facing id; its nested `id` is only a fallback for an empty key
+ * because gateways may put a canonical model identity there instead of the
+ * alias they accept on requests. Only object-valued map entries are models;
+ * primitive properties are ignored because they may be directory metadata
+ * rather than model records.
  *
  * Entries without a usable id are skipped rather than failing the whole
  * interrogation: a single malformed row should not deny the user the rest of
@@ -185,12 +188,14 @@ function readListing(body: unknown): LlmDiscoveredModel[] {
   if (Array.isArray(data)) {
     const rows = data as readonly unknown[]
     listed = rows.map(raw => ({ raw }))
+  } else if (Array.isArray(body)) {
+    listed = (body as readonly unknown[]).map(raw => ({ raw }))
   } else {
     const models = listing?.models
     if (models === null || typeof models !== 'object' || Array.isArray(models)) {
       throw new LlmError(
-        'the endpoint\'s model listing has neither a "data" array nor a "models" object; '
-        + 'enter this provider\'s models by hand',
+        'the endpoint\'s model listing has neither a "data" array, a top-level entry array,'
+        + ' nor a "models" object; enter this provider\'s models by hand',
         'DISCOVERY_FAILED',
       )
     }
