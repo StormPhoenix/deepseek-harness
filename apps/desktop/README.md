@@ -26,11 +26,11 @@ Press F12 (Fn+F12 on media-key keyboards), Command+Option+I on macOS, or Ctrl+Sh
 
 ## Keep the window on top
 
-Windows and macOS offer a pin button in the main workspace titlebar, independent of sidebar expansion. Windows places it just before the native minimize control using the titlebar overlay boundary; macOS places it at the upper right, leaving the traffic lights unchanged and reserving space only in overlapping header rows. The button follows the current language and theme, supports keyboard activation, and indicates its native state with an outline or filled pin.
+Windows and macOS offer a pin button immediately to the left of the main workspace's sidebar collapse or expand button. On macOS the pair sits at the sidebar's top-right when expanded and beside the unchanged traffic lights when collapsed; on Windows it precedes the sidebar controls and application menus in the caption row. The button follows the current language and theme, supports keyboard activation, and indicates its native state with an outline or filled pin.
 
 Pinning keeps the main window above ordinary windows without repeatedly taking focus. It does not pin Welcome or separate dialogs, appear in Web, or move the window to every macOS Space. Fullscreen hides the button and temporarily suspends pinning, restoring the previous choice on exit; maximizing on Windows is not fullscreen. Reloading, minimizing, hiding, and showing the same window retain its state. A newly created window starts unpinned, and quitting resets the choice without writing a preference. Operating-system security surfaces and exclusive fullscreen applications are outside this guarantee.
 
-The control uses isolated preload DOM and private, owner-checked main-process IPC rather than a plugin or public page API. Build Desktop and restart the application to load source changes; reloading an already running page does not rebuild its preload. Validate native behavior on both operating systems, including sidebar collapse, maximize, fullscreen, hide/show, and window recreation.
+The client provides empty `data-desktop-pin-seat` elements for the active platform (`darwin` or `win32`); the isolated preload owns their children and moves one control between seats without resetting native state. The control uses private, owner-checked main-process IPC rather than a plugin or public page API. Build Desktop and restart the application to load source changes; reloading an already running page does not rebuild its preload. Validate native behavior on both operating systems, including sidebar collapse, maximize, fullscreen, hide/show, and window recreation.
 
 ## Terminal command
 
