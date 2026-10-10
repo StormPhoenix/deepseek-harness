@@ -36,7 +36,7 @@ beforeEach(() => {
     }
     listen.call(this, type, listener, options)
   })
-  document.body.innerHTML = '<div data-shell-overlay></div>'
+  document.body.innerHTML = '<div data-shell-overlay></div><div data-desktop-pin-seat="win32"></div><div data-desktop-pin-seat="darwin"></div>'
   document.documentElement.lang = 'en'
   electron.invoke.mockReset()
   electron.invoke.mockResolvedValue(initial)
@@ -59,7 +59,7 @@ afterEach(() => {
 it.each(['win32', 'darwin'] as const)('keeps a localized, accessible titlebar toggle outside sidebar on %s', async (platform) => {
   control = installDesktopPin(platform)
   await ready()
-  expect(host().parentElement).toBe(document.body)
+  expect(host().parentElement).toBe(document.querySelector(`[data-desktop-pin-seat='${platform}']`))
   expect(host().shadowRoot).toBeNull()
   const beforeSynthetic = electron.invoke.mock.calls.length
   button().click()
@@ -67,7 +67,7 @@ it.each(['win32', 'darwin'] as const)('keeps a localized, accessible titlebar to
   expect(button().getAttribute('aria-label')).toBe('Keep window on top')
   expect(button().getAttribute('aria-pressed')).toBe('false')
   const css = root().querySelector('style')!.textContent!
-  expect(css).toContain(platform === 'win32' ? 'env(titlebar-area-width' : 'right: 12px')
+  expect(css).toContain(':host { position: relative;')
   // Shadow roots do not inherit the application's universal box-sizing rule.
   expect(css).toContain('button { box-sizing: border-box; width: 28px; height: 28px;')
   const sidebar = document.createElement('aside')
@@ -189,7 +189,7 @@ it('waits for AppFrame and releases listeners and late replies on disposal', asy
   expect(electron.invoke).not.toHaveBeenCalled()
   let resolve!: (state: DesktopPinState) => void
   electron.invoke.mockImplementationOnce(() => new Promise<DesktopPinState>((done) => { resolve = done }))
-  document.body.innerHTML = '<div data-shell-overlay></div>'
+  document.body.innerHTML = '<div data-shell-overlay></div><div data-desktop-pin-seat="win32"></div><div data-desktop-pin-seat="darwin"></div>'
   await vi.waitFor(() => { expect(document.querySelector('[data-desktop-pin]')).not.toBeNull() })
   const detached = button()
   control.dispose()
@@ -203,25 +203,37 @@ it('waits for AppFrame and releases listeners and late replies on disposal', asy
   expect(document.querySelector('[data-desktop-pin]')).toBeNull()
 })
 
-it.each(['windowDrag', 'dockkitStrip'] as const)('reserves an overlapping macOS %s row and releases it in fullscreen', async (marker) => {
+it('moves the same native control between sidebar seats without resetting pin state', async () => {
+  document.querySelector<HTMLElement>('[data-desktop-pin-seat="darwin"]')!.dataset.desktopPinFeedback = 'end'
+  control = installDesktopPin('darwin')
+  await ready()
+  expect(host().hasAttribute('data-feedback-end')).toBe(true)
+  publish({ ...initial, pinned: true, revision: 1 })
+  const original = host()
+  const expanded = original.parentElement!
+  const collapsed = document.createElement('div')
+  collapsed.dataset.desktopPinSeat = 'darwin'
+  expanded.removeAttribute('data-desktop-pin-seat')
+  document.body.append(collapsed)
+  await vi.waitFor(() => { expect(original.parentElement).toBe(collapsed) })
+  expect(host()).toBe(original)
+  expect(host().hasAttribute('data-feedback-end')).toBe(false)
+  expect(button().getAttribute('aria-pressed')).toBe('true')
+  expect(electron.invoke).toHaveBeenCalledExactlyOnceWith(DESKTOP_IPC.windowPinGet)
+  collapsed.remove()
+  expanded.setAttribute('data-desktop-pin-seat', 'darwin')
+  await vi.waitFor(() => { expect(original.parentElement).toBe(expanded) })
+  expect(button().getAttribute('aria-pressed')).toBe('true')
+})
+
+it.each(['windowDrag', 'dockkitStrip'] as const)('leaves %s row padding unchanged', async (marker) => {
   const row = document.createElement('div')
   row.dataset[marker] = ''
   row.style.paddingRight = '20px'
-  vi.spyOn(row, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 1000, 48))
   document.body.append(row)
-  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-    return this.hasAttribute('data-desktop-pin') ? new DOMRect(960, 11, 28, 28) : new DOMRect()
-  })
   control = installDesktopPin('darwin')
   await ready()
-  expect(row.hasAttribute('data-desktop-pin-clearance')).toBe(true)
-  expect(row.style.getPropertyValue('--dsh-pin-row-padding')).toBe('20px')
-  publish({ pinned: false, fullscreen: true, revision: 1 })
-  expect(row.hasAttribute('data-desktop-pin-clearance')).toBe(false)
-  publish({ ...initial, revision: 2 })
-  expect(row.hasAttribute('data-desktop-pin-clearance')).toBe(true)
-  control.dispose()
-  control = undefined
+  expect(row.style.paddingRight).toBe('20px')
   expect(row.hasAttribute('data-desktop-pin-clearance')).toBe(false)
   expect(row.style.getPropertyValue('--dsh-pin-row-padding')).toBe('')
 })
