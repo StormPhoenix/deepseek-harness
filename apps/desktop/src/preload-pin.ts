@@ -1,4 +1,4 @@
-/** Desktop-owned titlebar control, outside sidebar and product component lifetimes. */
+/** Desktop-owned titlebar control mounted in the client's empty pin seat. */
 import { ipcRenderer } from 'electron'
 import { DESKTOP_IPC, type DesktopPinState } from './ipc.ts'
 import { resolveDesktopLocale } from './locale.ts'
@@ -14,16 +14,16 @@ export function installDesktopPin(platform: 'win32' | 'darwin'): { dispose(): vo
   const shadow = host.attachShadow({ mode: 'closed' })
   const style = document.createElement('style')
   style.textContent = `
-    :host { position: fixed; z-index: 1100; top: ${platform === 'darwin' ? '11px' : 'calc((env(titlebar-area-height, 40px) - 28px) / 2)'};
-      ${platform === 'darwin' ? 'right: 12px;' : 'left: calc(env(titlebar-area-x, 0px) + env(titlebar-area-width, 0px) - 36px);'}
+    :host { position: relative; z-index: 31; display: block; width: 28px; height: 28px;
       -webkit-app-region: no-drag; font-family: var(--dsw-font-family); }
     :host([hidden]) { display: none; }
     button { box-sizing: border-box; width: 28px; height: 28px; padding: 6px; border: 0; border-radius: 6px;
       display: flex; background: transparent; color: var(--dsw-alias-label-secondary); cursor: default; }
     button:hover, button[aria-pressed=true] { color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-2); }
     button:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: -2px; }
-    [role=status] { position: absolute; right: 0; top: 36px; min-width: 180px; padding: 8px;
+    [role=status] { position: absolute; left: 0; top: 36px; min-width: 180px; padding: 8px;
       border-radius: 6px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-base); }
+    :host([data-feedback-end]) [role=status] { left: auto; right: 0; }
     [role=status]:empty { display: none; }
   `
   const button = document.createElement('button')
@@ -44,28 +44,8 @@ export function installDesktopPin(platform: 'win32' | 'darwin'): { dispose(): vo
   const status = document.createElement('span')
   status.setAttribute('role', 'status')
   shadow.append(style, button, status)
-  const clearanceStyle = document.createElement('style')
-  clearanceStyle.textContent = '[data-desktop-pin-clearance] { padding-right: calc(var(--dsh-pin-row-padding) + 44px) !important; }'
-  const rows = new Set<HTMLElement>()
-  const resize = new ResizeObserver(() => { layout() })
-  const layout = (): void => {
-    if (disposed || platform !== 'darwin' || !host.isConnected) return
-    const pin = host.getBoundingClientRect()
-    for (const row of rows) {
-      row.removeAttribute('data-desktop-pin-clearance')
-      row.style.removeProperty('--dsh-pin-row-padding')
-      if (!row.isConnected) { resize.unobserve(row); rows.delete(row) }
-    }
-    for (const row of document.querySelectorAll<HTMLElement>('[data-window-drag], [data-dockkit-strip]')) {
-      if (!rows.has(row)) { rows.add(row); resize.observe(row) }
-      if (host.hidden) continue
-      const box = row.getBoundingClientRect()
-      if (box.top < pin.bottom && box.bottom > pin.top && box.right > pin.left && box.left < pin.right) {
-        row.style.setProperty('--dsh-pin-row-padding', getComputedStyle(row).paddingRight)
-        row.dataset.desktopPinClearance = ''
-      }
-    }
-  }
+  const seatSelector = `[data-desktop-pin-seat='${platform}']`
+  const activeSeat = (): HTMLElement | null => document.querySelector<HTMLElement>(seatSelector)
   const render = (): void => {
     if (disposed) return
     const { messages } = resolveDesktopLocale(document.documentElement.lang)
@@ -75,11 +55,10 @@ export function installDesktopPin(platform: 'win32' | 'darwin'): { dispose(): vo
     button.setAttribute('aria-pressed', String(state?.pinned === true))
     button.disabled = pending || state === undefined || state.fullscreen
     head.setAttribute('fill', state?.pinned === true ? 'currentColor' : 'none')
-    const hidden = state === undefined || state.fullscreen || document.querySelector('[data-shell-overlay]') === null
+    const hidden = state === undefined || state.fullscreen || document.querySelector('[data-shell-overlay]') === null || host.parentElement !== activeSeat()
     if (host.hidden !== hidden) host.hidden = hidden
     const feedback = failed ? messages.windowPinFailed : ''
     if (status.textContent !== feedback) status.textContent = feedback
-    layout()
   }
   const accept = (next: DesktopPinState): void => {
     if (disposed || (state !== undefined && next.revision < state.revision)) return
@@ -107,24 +86,25 @@ export function installDesktopPin(platform: 'win32' | 'darwin'): { dispose(): vo
   })
   const mount = (): void => {
     if (disposed) return
-    if (!host.isConnected && document.querySelector('[data-shell-overlay]') !== null) {
-      document.body.append(host)
-      document.head.append(clearanceStyle)
-      void (ipcRenderer.invoke(DESKTOP_IPC.windowPinGet) as Promise<DesktopPinState>).then(accept, (error: unknown) => {
-        if (!disposed) console.error('Desktop window pin state failed', error)
-      })
+    const seat = document.querySelector('[data-shell-overlay]') === null ? null : activeSeat()
+    if (seat !== null && host.parentElement !== seat) {
+      host.toggleAttribute('data-feedback-end', seat.dataset.desktopPinFeedback === 'end')
+      seat.append(host)
+      if (state === undefined) {
+        void (ipcRenderer.invoke(DESKTOP_IPC.windowPinGet) as Promise<DesktopPinState>).then(accept, (error: unknown) => {
+          if (!disposed) console.error('Desktop window pin state failed', error)
+        })
+      }
     }
     render()
   }
   const observer = new MutationObserver(mount)
   observer.observe(document.body, {
     subtree: true, childList: true, attributes: true,
-    attributeFilter: ['class', 'hidden', 'data-window-drag', 'data-dockkit-strip', 'data-sidebar-right-open', 'data-sidebar-right-panel'],
+    attributeFilter: ['data-desktop-pin-seat'],
   })
   const localeObserver = new MutationObserver(render)
   localeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['lang'] })
-  window.addEventListener('resize', layout)
-  document.addEventListener('transitionend', layout, true)
   render()
   mount()
   return { dispose: () => {
@@ -132,16 +112,7 @@ export function installDesktopPin(platform: 'win32' | 'darwin'): { dispose(): vo
     disposed = true
     observer.disconnect()
     localeObserver.disconnect()
-    resize.disconnect()
     ipcRenderer.off(DESKTOP_IPC.windowPinChanged, receive)
-    window.removeEventListener('resize', layout)
-    document.removeEventListener('transitionend', layout, true)
-    for (const row of rows) {
-      row.removeAttribute('data-desktop-pin-clearance')
-      row.style.removeProperty('--dsh-pin-row-padding')
-    }
-    rows.clear()
-    clearanceStyle.remove()
     host.remove()
   } }
 }

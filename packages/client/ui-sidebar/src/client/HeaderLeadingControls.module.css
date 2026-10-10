@@ -1,5 +1,5 @@
 /* The frame's leadingSeat (ui-layout AppFrame) owns placement — position,
-   traffic-light clearance, no-drag; this box only lays out the two controls.
+   traffic-light clearance, no-drag; this box lays out the pin seat and controls.
    Same 8px rhythm as the conversation header's trailing controls
    (ConversationRoot .headerUtilities/.headerCorner), so both ends of the
    title row read as one control set. */
@@ -7,6 +7,17 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.pinSeat {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  -webkit-app-region: no-drag;
+}
+
+:global([data-fullscreen]) .pinSeat {
+  display: none;
 }
 
 .iconButton {
