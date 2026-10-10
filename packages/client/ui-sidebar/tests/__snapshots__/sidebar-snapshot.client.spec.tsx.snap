@@ -13,6 +13,10 @@ exports[`sidebar shell snapshots > renders Windows caption controls in expanded 
       class="logoRow"
       data-window-drag="true"
     >
+      <div
+        class="pinSeat"
+        data-desktop-pin-seat="win32"
+      />
       <button
         aria-label="Open sidebar"
         class="iconButton toggle"
@@ -155,6 +159,10 @@ exports[`sidebar shell snapshots > renders Windows caption controls in expanded 
           </span>
         </span>
       </button>
+      <div
+        class="pinSeat"
+        data-desktop-pin-seat="win32"
+      />
       <button
         aria-label="Collapse sidebar"
         class="iconButton toggle"

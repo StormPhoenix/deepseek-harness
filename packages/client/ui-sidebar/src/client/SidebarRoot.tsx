@@ -279,7 +279,13 @@ export function SidebarRoot({
     >
       {/* macOS hiddenInset titlebar: the strip shares the row with the
           traffic lights and keeps the toggle at the sidebar's top-right. */}
-      {darwinDesktop && <div className={css.topStrip} data-window-drag>{toggle}</div>}
+      {darwinDesktop && (
+        <div className={css.topStrip} data-window-drag>
+          {/* Empty children belong to the isolated Desktop preload. */}
+          <div className={css.pinSeat} data-desktop-pin-seat={collapsed ? undefined : 'darwin'} data-desktop-pin-feedback="end" />
+          {toggle}
+        </div>
+      )}
       <div className={css.logoRow} data-window-drag>
         {/* Expanded, the brand doubles as a New Session shortcut while the
             access snapshot allows `session/create` — except on
@@ -328,6 +334,7 @@ export function SidebarRoot({
               </button>
             )
         })()}
+        {windowsTitlebar && <div className={css.pinSeat} data-desktop-pin-seat="win32" />}
         {!darwinDesktop && toggle}
       </div>
 

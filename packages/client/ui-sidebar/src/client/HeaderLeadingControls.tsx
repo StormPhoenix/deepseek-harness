@@ -32,6 +32,8 @@ export function HeaderLeadingControls({
   const newShortcut = useShortcuts(rows => rows.find(row => row.id === 'session.new'))
   return (
     <div className={css.controls}>
+      {/* Empty children belong to the isolated Desktop preload. */}
+      <div className={css.pinSeat} data-desktop-pin-seat="darwin" />
       <Tooltip label={t('toggle.open')} shortcutKeys={shortcut?.keys} delayMs={500}>
         <button
           type="button"
