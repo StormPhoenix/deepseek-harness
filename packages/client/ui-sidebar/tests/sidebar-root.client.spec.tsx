@@ -281,7 +281,16 @@ describe('SidebarRoot shell', () => {
 it('keeps the macOS sidebar toggle in its top strip', () => {
   document.documentElement.dataset.platform = 'darwin'
   const shell = mountShell()
-  fireEvent.click(screen.getByRole('button', { name: en['toggle.collapse'] }))
+  const toggle = screen.getByRole('button', { name: en['toggle.collapse'] })
+  const seat = document.querySelector('[data-desktop-pin-seat="darwin"]')!
+  expect(seat.parentElement).toBe(toggle.parentElement)
+  expect(seat.nextElementSibling).toBe(toggle)
+  expect(seat.childElementCount).toBe(0)
+  shell.rerender({ collapsed: true, width: 0 })
+  expect(seat.hasAttribute('data-desktop-pin-seat')).toBe(false)
+  shell.rerender({ collapsed: false, width: 300 })
+  expect(seat.getAttribute('data-desktop-pin-seat')).toBe('darwin')
+  fireEvent.click(toggle)
   expect(shell.toggleSidebar).toHaveBeenCalledOnce()
   // The brand stays part of the logo row's window-drag surface: no button
   // role (the global no-drag rule would subtract it); only the dedicated
@@ -299,7 +308,10 @@ it('wires the shell.leading controls to the shared sidebar actions', () => {
   // This occupant only consumes its actions and locale, not Session hooks.
   const props = { toggleSidebar, startSession, trackEntryClick, t, useShortcuts: select => select([{ id: 'sidebar.left.toggle' as ShortcutCommandId, label: 'Toggle sidebar', aliases: [], binding: null, modified: false, conflicts: [], issue: null, keys: ['⌘', 'B'], aria: 'Meta+B' }]) } as HeaderLeadingControlsProps
   render(<HeaderLeadingControls {...props} />)
-  fireEvent.click(screen.getByRole('button', { name: en['toggle.open'] }))
+  const toggle = screen.getByRole('button', { name: en['toggle.open'] })
+  expect(toggle.previousElementSibling?.getAttribute('data-desktop-pin-seat')).toBe('darwin')
+  expect(toggle.previousElementSibling?.childElementCount).toBe(0)
+  fireEvent.click(toggle)
   expect(toggleSidebar).toHaveBeenCalledOnce()
   expect(trackEntryClick).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: en['session.new.label'] }))
