@@ -45,7 +45,7 @@
 :global([data-windows-titlebar]) .toggle {
   position: fixed;
   top: calc((var(--dsh-windows-titlebar-height) - 28px) / 2);
-  left: 12px;
+  left: 48px;
   z-index: 30;
   -webkit-app-region: no-drag;
 }
@@ -85,14 +85,18 @@
   display: none;
 }
 
-:global(html[data-windows-titlebar]:has([data-sidebar-collapsed='true'])) {
+:global(html[data-windows-titlebar]) {
   --dsh-windows-menu-start: 84px;
+}
+
+:global(html[data-windows-titlebar]:has([data-sidebar-collapsed='true'])) {
+  --dsh-windows-menu-start: 120px;
 }
 
 :global([data-windows-titlebar]) .collapsed .newSession {
   position: fixed;
   top: calc((var(--dsh-windows-titlebar-height) - 28px) / 2);
-  left: 48px;
+  left: 84px;
   margin: 0;
   padding: 0;
   border: none;
@@ -184,6 +188,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  gap: 8px;
   height: 52px;
   box-sizing: border-box;
   margin: -6px calc(-1 * var(--dsh-sidebar-inline-padding)) 0;
@@ -191,6 +196,24 @@
      seat (ui-layout .leadingSeat, top 11) and the conversation title row, so
      collapse/expand never shifts it vertically. */
   padding: 0 12px 2px;
+}
+
+.pinSeat {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  -webkit-app-region: no-drag;
+}
+
+:global([data-fullscreen]) .pinSeat {
+  display: none;
+}
+
+:global([data-windows-titlebar]) .pinSeat {
+  position: fixed;
+  top: calc((var(--dsh-windows-titlebar-height) - 28px) / 2);
+  left: 12px;
+  z-index: 30;
 }
 
 /* Window fullscreen hides the traffic lights (html[data-fullscreen], desktop
