@@ -29,9 +29,19 @@ export const DESKTOP_IPC = {
   updatesPresentation: 'dsh-desktop:updates-presentation',
   nativeThemeSet: 'dsh-desktop:native-theme-set',
   windowFullscreen: 'dsh-desktop:window-fullscreen',
+  windowPinGet: 'dsh-desktop:window-pin-get',
+  windowPinSet: 'dsh-desktop:window-pin-set',
+  windowPinChanged: 'dsh-desktop:window-pin-changed',
   windowsAppearance: 'dsh-desktop:windows-appearance',
   windowsMenu: 'dsh-desktop:windows-menu',
 } as const
+
+/** Native state for the main-window titlebar control; revision orders snapshots and notifications. */
+export interface DesktopPinState {
+  readonly pinned: boolean
+  readonly fullscreen: boolean
+  readonly revision: number
+}
 
 /** Desktop release update state rendered by desktop-owned UI. */
 export type DesktopUpdatePreparationFailureKind = 'stop-failed' | 'tasks-changed' | 'tasks-unavailable'
