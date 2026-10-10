@@ -22,6 +22,14 @@ Desktop microphone access is restricted to audio requests from the primary `dsh-
 
 Press F12 (Fn+F12 on media-key keyboards), Command+Option+I on macOS, or Ctrl+Shift+I on Windows to toggle DevTools for the focused application page, including in packaged builds. These native shortcuts use hidden application-menu items. Update overlays and packaged embedded browser guests disable DevTools.
 
+## Keep the window on top
+
+Windows and macOS offer a pin button in the main workspace titlebar, independent of sidebar expansion. Windows places it just before the native minimize control using the titlebar overlay boundary; macOS places it at the upper right, leaving the traffic lights unchanged and reserving space only in overlapping header rows. The button follows the current language and theme, supports keyboard activation, and indicates its native state with an outline or filled pin.
+
+Pinning keeps the main window above ordinary windows without repeatedly taking focus. It does not pin Welcome or separate dialogs, appear in Web, or move the window to every macOS Space. Fullscreen hides the button and temporarily suspends pinning, restoring the previous choice on exit; maximizing on Windows is not fullscreen. Reloading, minimizing, hiding, and showing the same window retain its state. A newly created window starts unpinned, and quitting resets the choice without writing a preference. Operating-system security surfaces and exclusive fullscreen applications are outside this guarantee.
+
+The control uses isolated preload DOM and private, owner-checked main-process IPC rather than a plugin or public page API. Build Desktop and restart the application to load source changes; reloading an already running page does not rebuild its preload. Validate native behavior on both operating systems, including sidebar collapse, maximize, fullscreen, hide/show, and window recreation.
+
 ## Terminal command
 
 The application menu's **Manage dsh Command…** entry, immediately below **Check for Updates…**, shows the current command and offers Install, Repair, and Remove. The command uses Desktop's installed runtime and the ordinary [dsh CLI](../cli/README.md), including when the Desktop application is closed. Open a new terminal after installation and run `dsh --version`.

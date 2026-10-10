@@ -13,7 +13,9 @@ import { en, zh } from '../src/locale.ts'
 import { DesktopUpdatePreparationError } from '../src/update-error.ts'
 import { writeCrashReport } from '../src/crash-report.ts'
 
-type InvokeEvent = { sender?: unknown; senderFrame: { url: string } }
+// senderFrame 允许为 null：Electron 的 IpcMainInvokeEvent.senderFrame 实际是 Frame | null，
+// 拒绝路径的用例需要传 null 来触发归属检查（运行时由 ownership 检查先行拦截）。
+type InvokeEvent = { sender?: unknown; senderFrame: { url: string } | null }
 type InvokeHandler = (event: InvokeEvent, ...args: unknown[]) => unknown
 
 vi.mock('../src/web-document.ts', () => ({ authenticateWebHost: async () => 'test-cookie', serveWebDocument: vi.fn(), forwardWebRequest: vi.fn() }))
@@ -92,7 +94,9 @@ const harness = await vi.hoisted(async () => {
     readonly hide = vi.fn()
     readonly focus = vi.fn()
     readonly moveTop = vi.fn()
-    readonly setAlwaysOnTop = vi.fn()
+    pinned = false
+    readonly isAlwaysOnTop = vi.fn(() => this.pinned)
+    readonly setAlwaysOnTop = vi.fn((pinned: boolean) => { this.pinned = pinned; this.emit('always-on-top-changed') })
     readonly restore = vi.fn()
     readonly setSize = vi.fn()
     readonly getBounds = vi.fn(() => ({ x: 0, y: 0, width: 800, height: 700 }))
@@ -750,6 +754,98 @@ describe('desktop main startup', () => {
     expect(sent()).toHaveLength(relayed)
   })
 
+  it.each(['darwin', 'win32'] as const)('owns nonpersistent pin state and suspends it in fullscreen on %s', async (platform) => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue(platform)
+    await import('../src/main.ts')
+    await harness.preparing.promise
+    const window = harness.windows[0]!
+    expect(invoke(DESKTOP_IPC.windowPinGet, 'app')).toMatchObject({ pinned: false, fullscreen: false })
+    expect(window.setAlwaysOnTop).not.toHaveBeenCalled()
+    expect(invoke(DESKTOP_IPC.windowPinSet, 'app', true)).toMatchObject({ pinned: true })
+    for (const event of ['minimize', 'restore', 'hide', 'show']) window.emit(event)
+    window.webContents.emit('did-finish-load')
+    expect(invoke(DESKTOP_IPC.windowPinGet, 'app')).toMatchObject({ pinned: true })
+    window.fullscreen = true
+    window.emit('enter-full-screen')
+    expect(window.setAlwaysOnTop).toHaveBeenLastCalledWith(false)
+    expect(invoke(DESKTOP_IPC.windowPinGet, 'app')).toMatchObject({ pinned: false, fullscreen: true })
+    expect(() => invoke(DESKTOP_IPC.windowPinSet, 'app', true)).toThrow('cannot pin a fullscreen window')
+    window.webContents.emit('did-finish-load')
+    window.fullscreen = false
+    window.emit('leave-full-screen')
+    expect(invoke(DESKTOP_IPC.windowPinGet, 'app')).toMatchObject({ pinned: true, fullscreen: false })
+    expect(invoke(DESKTOP_IPC.windowPinSet, 'app', false)).toMatchObject({ pinned: false })
+    const calls = window.setAlwaysOnTop.mock.calls.length
+    window.fullscreen = true
+    window.emit('enter-full-screen')
+    window.fullscreen = false
+    window.emit('leave-full-screen')
+    expect(window.setAlwaysOnTop).toHaveBeenCalledTimes(calls)
+    const sent = window.webContents.send.mock.calls.filter(([channel]) => channel === DESKTOP_IPC.windowPinChanged)
+    expect(sent.at(-1)?.[1]).toMatchObject({ pinned: false, fullscreen: false })
+    window.emit('closed')
+    const messages = window.webContents.send.mock.calls.filter(([channel]) => channel === DESKTOP_IPC.windowPinChanged).length
+    window.webContents.emit('did-finish-load')
+    expect(window.webContents.send.mock.calls.filter(([channel]) => channel === DESKTOP_IPC.windowPinChanged)).toHaveLength(messages)
+  })
+
+  it('rejects invalid pin choices, non-owner frames and foreign origins without changing the window', async () => {
+    await import('../src/main.ts')
+    await harness.preparing.promise
+    const window = harness.windows[0]!
+    const sender = window.webContents
+    const handler = harness.handlers.get(DESKTOP_IPC.windowPinSet)!
+    for (const event of [
+      { sender: {}, senderFrame: sender.mainFrame },
+      { sender, senderFrame: { url: 'dsh-app://app/' } },
+      { sender, senderFrame: null },
+    ]) expect(() => handler(event, true)).toThrow('unowned renderer')
+    const original = sender.mainFrame.url
+    for (const url of ['dsh-app://shell/index.html', 'https://example.com/']) {
+      sender.mainFrame.url = url
+      expect(() => handler({ sender, senderFrame: sender.mainFrame }, true)).toThrow('unowned renderer')
+    }
+    sender.mainFrame.url = original
+    for (const choice of [undefined, null, 'true', 1, {}]) {
+      expect(() => invoke(DESKTOP_IPC.windowPinSet, 'app', choice)).toThrow('invalid window pin choice')
+    }
+    expect(window.setAlwaysOnTop).not.toHaveBeenCalled()
+    window.setAlwaysOnTop.mockImplementationOnce(() => { throw new Error('native pin failure') })
+    expect(() => invoke(DESKTOP_IPC.windowPinSet, 'app', true)).toThrow('native pin failure')
+    expect(invoke(DESKTOP_IPC.windowPinGet, 'app')).toMatchObject({ pinned: false })
+  })
+
+  it.each(['darwin', 'win32'] as const)('publishes native state when fullscreen pin suspension or restoration fails on %s', async (platform) => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue(platform)
+    await import('../src/main.ts')
+    await harness.preparing.promise
+    const window = harness.windows[0]!
+    invoke(DESKTOP_IPC.windowPinSet, 'app', true)
+    window.setAlwaysOnTop.mockImplementationOnce(() => { throw new Error('suspend denied') })
+    window.fullscreen = true
+    expect(() => window.emit('enter-full-screen')).not.toThrow()
+    expect(invoke(DESKTOP_IPC.windowPinGet, 'app')).toMatchObject({ pinned: true, fullscreen: true })
+    expect(console.error).toHaveBeenCalledWith('Desktop fullscreen pin suspension failed', expect.any(Error))
+    window.fullscreen = false
+    window.emit('leave-full-screen')
+    window.fullscreen = true
+    window.emit('enter-full-screen')
+    expect(window.isAlwaysOnTop()).toBe(false)
+    window.setAlwaysOnTop.mockImplementationOnce(() => { throw new Error('restore denied') })
+    window.fullscreen = false
+    expect(() => window.emit('leave-full-screen')).not.toThrow()
+    expect(invoke(DESKTOP_IPC.windowPinGet, 'app')).toMatchObject({ pinned: false, fullscreen: false })
+    expect(console.error).toHaveBeenCalledWith('Desktop fullscreen pin restoration failed', expect.any(Error))
+    expect(invoke(DESKTOP_IPC.windowPinSet, 'app', true)).toMatchObject({ pinned: true })
+  })
+
+  it('does not expose a native pin controller on Linux', async () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux')
+    await import('../src/main.ts')
+    await harness.preparing.promise
+    expect(() => invoke(DESKTOP_IPC.windowPinGet, 'app')).toThrow('window pin is unavailable on this platform')
+  })
+
   it.each(['linux'] as const)('registers no fullscreen relay on %s', async (platform) => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue(platform)
     await import('../src/main.ts')
@@ -1074,12 +1170,16 @@ describe('desktop main startup', () => {
     if (raises) {
       expect(window.show.mock.invocationCallOrder[0]).toBeLessThan(window.moveTop.mock.invocationCallOrder[0]!)
     }
+    if (platform === 'win32' || platform === 'darwin') {
+      expect(invoke(DESKTOP_IPC.windowPinSet, 'app', true)).toMatchObject({ pinned: true })
+    }
     window.destroy()
     harness.app.emit('second-instance')
     const replacement = harness.windows[1]!
     await replacement.shown.promise
     expect(replacement.show).toHaveBeenCalledOnce()
     expect(replacement.moveTop).not.toHaveBeenCalled()
+    expect(replacement.isAlwaysOnTop()).toBe(false)
     expect(replacement.setAlwaysOnTop).not.toHaveBeenCalled()
   })
 
