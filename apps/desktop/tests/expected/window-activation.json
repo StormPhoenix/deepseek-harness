@@ -1,0 +1,10 @@
+[
+  {
+    "type": "window-activated",
+    "requestId": 1
+  },
+  {
+    "type": "window-activated",
+    "requestId": 2
+  }
+]

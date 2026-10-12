@@ -526,6 +526,15 @@ async function main(): Promise<void> {
           segmentBytes: 256 * 1024, recordBytes: 4096, queuedBytes: 64 * 1024,
         })
         operationJournal.enqueue(JSON.stringify(record))
+      }, () => {
+        const recovering = (): boolean => recovery.active
+        if (quitting || shuttingDown || recovering()
+          || (isMandatory() ? mandatoryUI === undefined
+            : !enteredWorkspace && (welcomeWindow === undefined || welcomeWindow.isDestroyed()))) {
+          throw new Error('desktop window activation is unavailable')
+        }
+        focusPrimaryWindow()
+        if (recovering()) throw new Error('desktop window activation failed')
       })
     return {
       start: async () => {

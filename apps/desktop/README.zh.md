@@ -69,6 +69,8 @@ macOS 安装会创建 `/usr/local/bin/dsh`；目录权限需要时，系统会�
 
 ## 关闭窗口与退出
 
+在 Windows 上，当 `DSH_DESKTOP_WINDOW_ACTIVATION=1` 时，Host 插件可以通过私有子进程 IPC 通道请求激活窗口。壳接受带正安全整数 ID 的 `{ type: 'activate-window', requestId }`，并返回 `{ type: 'window-activated', requestId, error? }`。壳恢复、显示并聚焦当前选定窗口，保留欢迎页和强制更新的优先级；窗口缺失时启动重建。启动尚未选定窗口、故障恢复和退出期间会拒绝激活，但不会因此停止 Host。成功应答只确认壳已执行操作，不代表导航已完成，也不保证在 Windows 限制下获得前台焦点。Desktop 源码修改需要构建并完整重启应用；仅重载渲染页面不生效。
+
 关闭主窗口（macOS 的关闭按钮和 ⌘W；Windows 的 ×、Alt+F4 和任务栏"关闭窗口"）会隐藏窗口；Windows 首次隐藏前需要确认。页面和 Host 继续运行，任务不受影响，下次显示时仍是原来的文档，会话、草稿和滚动位置都保留；macOS 全屏窗口先退出全屏再隐藏。macOS 通过 Dock 图标、再次启动或 `dsh://open` 找回窗口，Windows 通过托盘找回。最小化行为不变。进入工作区前关闭欢迎窗口，Windows 上走退出流程，macOS 上应用留在 Dock 中且没有窗口。
 
 Windows 在整个运行期间常驻托盘图标。悬停提示为产品名，单击显示并聚焦窗口，右键菜单提供壳语言下的"打开 DeepSeek Harness"和"退出 DeepSeek Harness"。首次隐藏前复用更新弹窗，显示“正在运行的任务不会中断，可在系统托盘中重新打开窗口”和“确认”按钮。确认后隐藏窗口，并在 Electron userData 下写入 `background-close-confirmed`；Esc、关闭弹窗或加载失败均保持主窗口可见，不记录确认。重复关闭请求会聚焦已有壳弹窗。覆盖更新保留标记，卸载删除标记。旧的 `background-notice-shown` 标记不会跳过此确认。关闭窗口不发送系统通知。托盘位图是 `resources/tray-windows.ico`，由 `pnpm run render:tray-icon` 从 `resources/icon-windows.svg` 按 16、20、24、32、40、48、64 像素分别渲染，打包为 `resources/tray.ico`。macOS 不提供菜单栏图标。
