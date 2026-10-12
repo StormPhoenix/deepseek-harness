@@ -87,7 +87,103 @@ function hostProcess(
 
 afterEach(async () => {
   await Promise.all(hosts.splice(0).map(host => host.stop()))
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  vi.unstubAllGlobals()
+})
+
+const ACTIVATION_HOST = HTTP_HOST.replace("  if (request.url === '/fatal') {", `
+  if (request.url === '/activate') {
+    const replies = []
+    const receive = message => {
+      if (message.type !== 'window-activated') return
+      replies.push(message)
+      if (replies.length === 2) {
+        process.off('message', receive)
+        response.end(JSON.stringify(replies))
+      }
+    }
+    process.on('message', receive)
+    process.send({ type: 'activate-window', requestId: 1 })
+    process.send({ type: 'activate-window', requestId: 2 })
+    return
+  }
+  if (request.url === '/fatal') {`)
+
+function activationHost(source: string, activate?: () => void, environment = process.env): DesktopHostProcess {
+  const runtime = projectWithHost(source)
+  const host = new DesktopHostProcess(process.execPath, runtime, runtime, undefined, environment,
+    undefined, undefined, undefined, undefined, activate)
+  hosts.push(host)
+  return host
+}
+
+it('correlates activation replies separately from shell controls without interrupting the Host', async () => {
+  const activate = vi.fn()
+  const host = activationHost(ACTIVATION_HOST, activate)
+  const { url } = await host.start()
+  const [response, active, quit] = await Promise.all([
+    fetch(new URL('/activate', url)), host.updateTasks('lock'), host.inspectQuit(),
+  ])
+  await expect(JSON.stringify(await response.json(), null, 2) + '\n')
+    .toMatchFileSnapshot('./expected/window-activation.json')
+  expect(activate).toHaveBeenCalledTimes(2)
+  expect(active).toBe(true)
+  expect(quit).toEqual({ activeTasks: false, scheduledTasks: false })
+  await host.stop(true)
+})
+
+it.each([false, true])('answers unavailable or throwing activation without killing the Host: callback %s', async (provided) => {
+  const host = activationHost(ACTIVATION_HOST, provided ? () => { throw new Error('activation refused') } : undefined)
+  const { url } = await host.start()
+  expect(await (await fetch(new URL('/activate', url))).json()).toEqual([
+    { type: 'window-activated', requestId: 1, error: provided ? 'activation refused' : 'desktop window activation is unavailable' },
+    { type: 'window-activated', requestId: 2, error: provided ? 'activation refused' : 'desktop window activation is unavailable' },
+  ])
+  expect(await host.updateTasks('inspect')).toBe(false)
+  await host.stop(true)
+})
+
+it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '1', null])('rejects malformed activation id %s', async (requestId) => {
+  const host = activationHost(`process.send({ type: 'activate-window', requestId: ${JSON.stringify(requestId)} })`, vi.fn())
+  await expect(host.start()).rejects.toThrow('invalid IPC event')
+})
+
+it('continues rejecting unknown Host events', async () => {
+  const host = activationHost("process.send({ type: 'activate-other-window', requestId: 1 })", vi.fn())
+  await expect(host.start()).rejects.toThrow('invalid IPC event')
+})
+
+it.each(['win32', 'darwin', 'linux'])('advertises activation only with a Windows callback: %s', async (platform) => {
+  vi.stubGlobal('process', { ...process, platform })
+  for (const provided of [false, true]) {
+    const host = activationHost(HTTP_HOST.replace('runtime: process.argv[2]', 'activation: process.env.DSH_DESKTOP_WINDOW_ACTIVATION ?? null, runtime: process.argv[2]'),
+      provided ? vi.fn() : undefined, { ...process.env, DSH_DESKTOP_WINDOW_ACTIVATION: '1' })
+    const { url } = await host.start()
+    expect(await (await fetch(url)).json()).toMatchObject({ activation: platform === 'win32' && provided ? '1' : null })
+    await host.stop(true)
+  }
+})
+
+it('rejects activation while stopping and lets the child acknowledge shutdown', async () => {
+  const activate = vi.fn()
+  const host = activationHost(HTTP_HOST.replace('  server.close(() => {', `
+  process.once('message', reply => {
+    if (reply.type !== 'window-activated' || reply.requestId !== 9 || !reply.error) process.exit(19)
+    server.close(() => { process.send({ type: 'shutdown-complete' }, () => process.disconnect()) })
+    server.closeAllConnections()
+  })
+  process.send({ type: 'activate-window', requestId: 9 })
+  return
+  server.close(() => {`), activate)
+  await host.start()
+  await host.stop(true)
+  expect(activate).not.toHaveBeenCalled()
+})
+
+it('contains activation replies when the child disconnects immediately after sending', async () => {
+  const host = activationHost("process.send({ type: 'activate-window', requestId: 1 }, () => process.disconnect())", vi.fn())
+  await expect(host.start()).rejects.toThrow('host stopped')
+  await host.stop()
 })
 
 describe('desktop host process', () => {
