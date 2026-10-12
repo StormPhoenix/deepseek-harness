@@ -446,7 +446,16 @@ async function main(): Promise<void> {
     const host = new DesktopHostProcess(resources.node, resources.dsh, activeProject,
       hostInspectPort, { ...hostEnvironment, DSH_CLIENT_VERSION: desktopClientVersion() }, onFailure,
       primaryRuntime,
-      resources, (next) => { platformView.setSession(next) })
+      resources, (next) => { platformView.setSession(next) }, () => {
+        const recovering = (): boolean => recovery.active
+        if (quitting || shuttingDown || recovering()
+          || (isMandatory() ? mandatoryUI === undefined
+            : !enteredWorkspace && (welcomeWindow === undefined || welcomeWindow.isDestroyed()))) {
+          throw new Error('desktop window activation is unavailable')
+        }
+        focusPrimaryWindow()
+        if (recovering()) throw new Error('desktop window activation failed')
+      })
     return {
       start: async () => {
         const ready = await host.start()
