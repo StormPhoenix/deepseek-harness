@@ -116,6 +116,7 @@ const harness = await vi.hoisted(async () => {
     visible = true
     isVisible() { return this.visible }
     isFocused() { return true }
+    async loadFile(path: string) { this.urls.push(path) }
     async loadURL(url: string) {
       this.urls.push(url)
       this.webContents.mainFrame.url = url
@@ -152,6 +153,8 @@ const harness = await vi.hoisted(async () => {
       readonly inspectPort?: number, readonly environment?: NodeJS.ProcessEnv, readonly onFailure?: (error: Error) => void,
       readonly primaryRuntime?: string,
       readonly packageManager?: { pnpm: string; nodeBin: string },
+      readonly onPlatformSession?: (session: unknown) => void,
+      readonly onActivateWindow?: () => void,
     ) { hosts.push(this) }
   }
   const app = Object.assign(new EventEmitter(), {
@@ -1279,6 +1282,89 @@ describe('desktop main startup', () => {
     await harness.navigated.promise
     return harness.hosts[0]!
   }
+
+  it('restores and focuses the existing workspace through the Host activation callback without navigating', async () => {
+    const host = await readyForUpdate()
+    const window = harness.windows[0]!
+    await window.shown.promise
+    vi.spyOn(window, 'isMinimized').mockReturnValue(true)
+    window.show.mockClear()
+    window.focus.mockClear()
+    const urls = [...window.urls]
+    expect(host.onActivateWindow).toBeTypeOf('function')
+    host.onActivateWindow!()
+    expect(window.restore).toHaveBeenCalledOnce()
+    expect(window.show).toHaveBeenCalledOnce()
+    expect(window.focus).toHaveBeenCalledOnce()
+    expect(window.urls).toEqual(urls)
+    expect(host.stop).not.toHaveBeenCalled()
+  })
+
+  it('refuses Host activation before startup selects a window and during fatal recovery', async () => {
+    await import('../src/main.ts')
+    await harness.preparing.promise
+    harness.prepared.resolve()
+    await harness.hostStarted.promise
+    const host = harness.hosts[0]!
+    expect(() => { host.onActivateWindow!() }).toThrow('activation is unavailable')
+    host.ready.resolve()
+    await harness.windows[0]!.shown.promise
+    host.onFailure!(new Error('activation test failure'))
+    await harness.dialogShown.promise
+    expect(() => { host.onActivateWindow!() }).toThrow('activation is unavailable')
+  })
+
+  it('activates Welcome instead of exposing the unselected workspace', async () => {
+    await import('../src/main.ts')
+    await harness.preparing.promise
+    harness.prepared.resolve()
+    await harness.hostStarted.promise
+    const host = harness.hosts[0]!
+    host.fetch.mockResolvedValue(Response.json({ loggedIn: false, hasApiKey: false, writable: true, localePreference: null }))
+    host.ready.resolve()
+    await vi.waitFor(() => { expect(harness.windows).toHaveLength(2) })
+    const welcome = harness.windows[1]!
+    await welcome.shown.promise
+    welcome.focus.mockClear()
+    harness.windows[0]!.show.mockClear()
+    host.onActivateWindow!()
+    expect(welcome.focus).toHaveBeenCalledOnce()
+    expect(harness.windows[0]!.show).not.toHaveBeenCalled()
+  })
+
+  it('activates the mandatory update presentation without bypassing its block', async () => {
+    harness.embeddedPolicy = { origin: 'https://policy.example.com', allowedPageOrigins: ['https://downloads.example.com'] }
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ code: 40005, data: {
+      show_content: { title: 'Update required', detail: 'Please update' }, desktop_app_link: 'https://downloads.example.com/',
+    } })))
+    const host = await readyForUpdate()
+    await harness.policyBlocked.promise
+    const window = harness.windows[0]!
+    window.focus.mockClear()
+    host.onActivateWindow!()
+    expect(window.focus).toHaveBeenCalledOnce()
+    expect(host.stop).not.toHaveBeenCalled()
+  })
+
+  it('rejects Host activation once quitting has started', async () => {
+    const host = await readyForUpdate()
+    await harness.windows[0]!.shown.promise
+    harness.app.quit()
+    await host.stopping.promise
+    expect(() => { host.onActivateWindow!() }).toThrow('activation is unavailable')
+    host.exited.resolve()
+    await harness.quitCompleted.promise
+  })
+
+  it('initiates window recreation through Host activation without restarting the Host', async () => {
+    const host = await readyForUpdate()
+    await harness.windows[0]!.shown.promise
+    harness.windows[0]!.destroy()
+    host.onActivateWindow!()
+    await harness.windows[1]!.shown.promise
+    expect(harness.hosts).toHaveLength(1)
+    expect(host.stop).not.toHaveBeenCalled()
+  })
 
   it.each([
     ['win32', ['--updated'], true],
