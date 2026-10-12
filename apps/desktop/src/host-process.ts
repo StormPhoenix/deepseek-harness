@@ -23,7 +23,10 @@ interface PlatformSessionEvent {
   readonly session: PlatformSession | null
 }
 
-type DesktopHostEvent = ReadyEvent | FatalEvent | PlatformSessionEvent | { readonly type: 'shutdown-complete' } | {
+type DesktopHostEvent = ReadyEvent | FatalEvent | PlatformSessionEvent | {
+  readonly type: 'activate-window'
+  readonly requestId: number
+} | { readonly type: 'shutdown-complete' } | {
   readonly type: 'update-tasks'
   readonly requestId: number
   readonly active: boolean
@@ -37,7 +40,7 @@ type DesktopHostEvent = ReadyEvent | FatalEvent | PlatformSessionEvent | { reado
 }
 
 /** Correlated answer to one shell control request. */
-type DesktopHostControlResponse = Extract<DesktopHostEvent, { readonly requestId: number }>
+type DesktopHostControlResponse = Extract<DesktopHostEvent, { readonly type: 'update-tasks' | 'quit-inspection' }>
 
 /** What quitting now would affect, as reported by the Host. */
 export interface DesktopQuitInspection {
@@ -79,6 +82,8 @@ function isDesktopHostEvent(message: unknown): message is DesktopHostEvent {
     }
     case 'fatal':
       return typeof candidate.message === 'string' && (candidate.diagnostic === undefined || typeof candidate.diagnostic === 'string')
+    case 'activate-window':
+      return typeof candidate.requestId === 'number' && Number.isSafeInteger(candidate.requestId) && candidate.requestId > 0
     case 'update-tasks':
       return Number.isSafeInteger(candidate.requestId) && typeof candidate.active === 'boolean'
         && (candidate.error === undefined || typeof candidate.error === 'string')
@@ -165,6 +170,8 @@ export class DesktopHostProcess {
    *   `office-skills` resources fail Host startup.
    * @param packageManager - Bundled pnpm entry and Node launcher directory, scoped to package operations.
    * @param onPlatformSession - Private credential updates for embedded Platform views.
+   * @param onActivateWindow - Restore/show/focus the selected shell window or initiate its recreation synchronously;
+   *   throw when activation is unavailable. Success does not guarantee operating-system foreground focus.
    */
   constructor(
     private readonly node: string,
@@ -177,6 +184,7 @@ export class DesktopHostProcess {
     private readonly packageManager?: { readonly pnpm: string; readonly nodeBin: string },
 
     private readonly onPlatformSession?: (session: PlatformSession | null) => void,
+    private readonly onActivateWindow?: () => void,
   ) {}
 
   /**
@@ -186,6 +194,9 @@ export class DesktopHostProcess {
   async start(): Promise<DesktopHostReady> {
     if (this.child !== undefined) return this.readyPromise
     const entry = join(this.runtimeDir, 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'index.js')
+    const environment = desktopNodeEnvironment(this.node, undefined, this.environment)
+    delete environment.DSH_DESKTOP_WINDOW_ACTIVATION
+    if (process.platform === 'win32' && this.onActivateWindow !== undefined) environment.DSH_DESKTOP_WINDOW_ACTIVATION = '1'
     const child = spawn(this.node, [
       '--expose-internals',
       ...(this.inspectPort === undefined ? [] : [`--inspect=127.0.0.1:${String(this.inspectPort)}`]),
@@ -196,7 +207,7 @@ export class DesktopHostProcess {
       ...this.packageManager === undefined ? [] : [this.packageManager.pnpm, this.packageManager.nodeBin],
     ], {
       cwd: this.projectDir,
-      env: desktopNodeEnvironment(this.node, undefined, this.environment),
+      env: environment,
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     })
     this.child = child
@@ -216,6 +227,7 @@ export class DesktopHostProcess {
         else this.fail(new Error('dsh desktop host acknowledged an unrequested shutdown'))
       }
       else if (message.type === 'fatal') this.fail(new DesktopHostFatalError(message.message, message.diagnostic))
+      else if (message.type === 'activate-window') this.activateWindow(child, message.requestId)
       else {
         const request = this.controlRequests.get(message.requestId)
         if (message.error === undefined) request?.resolve(message)
@@ -255,6 +267,28 @@ export class DesktopHostProcess {
     const response = await this.control({ type: 'quit-inspection' }, QUIT_INSPECTION_DEADLINE_MS, 'desktop quit: inspection timed out')
     if (response.type !== 'quit-inspection') throw new Error('desktop quit: Host answered with a different control response')
     return { activeTasks: response.activeTasks, scheduledTasks: response.scheduledTasks }
+  }
+
+  private activateWindow(child: ChildProcess, requestId: number): void {
+    if (!child.connected) return
+    let error: string | undefined
+    try {
+      if (this.stopping || this.failureReported || this.onActivateWindow === undefined) {
+        throw new Error('desktop window activation is unavailable')
+      }
+      this.onActivateWindow()
+    } catch (activationError) {
+      error = activationError instanceof Error ? activationError.message : String(activationError)
+    }
+    try {
+      child.send({ type: 'window-activated', requestId, ...error === undefined ? {} : { error } }, (sendError) => {
+        // A disconnect can precede child.connected changing; child exit owns transport failure reporting.
+        if (sendError !== null) return
+      })
+    } catch (sendError) {
+      // The requester has a deadline; failed replies must not turn activation into a Host crash.
+      console.warn('desktop window activation reply failed', sendError)
+    }
   }
 
   private async control(
