@@ -175,7 +175,7 @@ const harness = await vi.hoisted(async () => {
       readonly packageManager?: { pnpm: string; nodeBin: string },
       readonly onPlatformSession?: ConstructorParameters<typeof DesktopHostProcess>[8],
       readonly onPluginOperation?: ConstructorParameters<typeof DesktopHostProcess>[9],
-      readonly onActivateWindow?: () => void,
+      readonly onActivateWindow?: () => void | Promise<void>,
     ) { hosts.push(this) }
   }
   const app = Object.assign(new EventEmitter(), {
@@ -1343,12 +1343,13 @@ describe('desktop main startup', () => {
     const host = await readyForUpdate()
     const window = harness.windows[0]!
     await window.shown.promise
-    vi.spyOn(window, 'isMinimized').mockReturnValue(true)
+    window.minimized = true
+    window.restore.mockImplementation(() => { window.minimized = false; window.emit('restore') })
     window.show.mockClear()
     window.focus.mockClear()
     const urls = [...window.urls]
     expect(host.onActivateWindow).toBeTypeOf('function')
-    host.onActivateWindow!()
+    await host.onActivateWindow!()
     expect(window.restore).toHaveBeenCalledOnce()
     expect(window.show).toHaveBeenCalledOnce()
     expect(window.focus).toHaveBeenCalledOnce()
@@ -1362,12 +1363,12 @@ describe('desktop main startup', () => {
     harness.prepared.resolve()
     await harness.hostStarted.promise
     const host = harness.hosts[0]!
-    expect(() => { host.onActivateWindow!() }).toThrow('activation is unavailable')
+    await expect(host.onActivateWindow!()).rejects.toMatchObject({ code: 'unavailable' })
     host.ready.resolve()
     await harness.windows[0]!.shown.promise
     host.onFailure!(new Error('activation test failure'))
     await harness.dialogShown.promise
-    expect(() => { host.onActivateWindow!() }).toThrow('activation is unavailable')
+    await expect(host.onActivateWindow!()).rejects.toMatchObject({ code: 'unavailable' })
   })
 
   it('activates Welcome instead of exposing the unselected workspace', async () => {
@@ -1383,7 +1384,7 @@ describe('desktop main startup', () => {
     await welcome.shown.promise
     welcome.focus.mockClear()
     harness.windows[0]!.show.mockClear()
-    host.onActivateWindow!()
+    await host.onActivateWindow!()
     expect(welcome.focus).toHaveBeenCalledOnce()
     expect(harness.windows[0]!.show).not.toHaveBeenCalled()
   })
@@ -1397,7 +1398,7 @@ describe('desktop main startup', () => {
     await harness.policyBlocked.promise
     const window = harness.windows[0]!
     window.focus.mockClear()
-    host.onActivateWindow!()
+    await host.onActivateWindow!()
     expect(window.focus).toHaveBeenCalledOnce()
     expect(host.stop).not.toHaveBeenCalled()
   })
@@ -1407,7 +1408,7 @@ describe('desktop main startup', () => {
     await harness.windows[0]!.shown.promise
     harness.app.quit()
     await host.stopping.promise
-    expect(() => { host.onActivateWindow!() }).toThrow('activation is unavailable')
+    await expect(host.onActivateWindow!()).rejects.toMatchObject({ code: 'unavailable' })
     host.exited.resolve()
     await harness.quitCompleted.promise
   })
@@ -1416,10 +1417,66 @@ describe('desktop main startup', () => {
     const host = await readyForUpdate()
     await harness.windows[0]!.shown.promise
     harness.windows[0]!.destroy()
-    host.onActivateWindow!()
+    await host.onActivateWindow!()
     await harness.windows[1]!.shown.promise
     expect(harness.hosts).toHaveLength(1)
     expect(host.stop).not.toHaveBeenCalled()
+  })
+
+  it('does not focus a recreated window after its request preparation times out', async () => {
+    const host = await readyForUpdate()
+    await harness.windows[0]!.shown.promise
+    harness.windows[0]!.destroy()
+    let finishLoad!: () => void
+    vi.spyOn(harness.FakeWindow.prototype, 'loadURL').mockImplementation(() => new Promise<void>((resolve) => { finishLoad = resolve }))
+    {
+      const activation = host.onActivateWindow!()
+      const rejected = expect(activation).rejects.toMatchObject({ code: 'activation-timeout' })
+      const replacement = harness.windows[1]!
+      expect(replacement.show).not.toHaveBeenCalled()
+      expect(replacement.focus).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1_000)
+      await rejected
+      finishLoad()
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(replacement.show).not.toHaveBeenCalled()
+      expect(replacement.focus).not.toHaveBeenCalled()
+      expect(host.stop).not.toHaveBeenCalled()
+    }
+  })
+
+  it('shares a single native activation attempt across concurrent Host requests', async () => {
+    const host = await readyForUpdate()
+    const window = harness.windows[0]!
+    await window.shown.promise
+    const focus = vi.spyOn(window, 'isFocused').mockReturnValue(false)
+    window.show.mockClear()
+    window.focus.mockClear()
+    const first = host.onActivateWindow!()
+    const second = host.onActivateWindow!()
+    expect(second).toBe(first)
+    expect(window.show).toHaveBeenCalledOnce()
+    expect(window.focus).toHaveBeenCalledOnce()
+    focus.mockReturnValue(true)
+    window.emit('focus')
+    await Promise.all([first, second])
+    await host.onActivateWindow!()
+    expect(window.focus).toHaveBeenCalledTimes(2)
+  })
+
+  it('awaits a focus event and removes request listeners when the target closes', async () => {
+    const host = await readyForUpdate()
+    const window = harness.windows[0]!
+    await window.shown.promise
+    vi.spyOn(window, 'isFocused').mockReturnValue(false)
+    const before = window.listenerCount('focus')
+    const activation = host.onActivateWindow!()
+    const rejected = expect(activation).rejects.toMatchObject({ code: 'unavailable' })
+    expect(window.listenerCount('focus')).toBe(before + 1)
+    window.destroy()
+    await rejected
+    expect(window.listenerCount('focus')).toBe(before)
   })
 
   it.each([
