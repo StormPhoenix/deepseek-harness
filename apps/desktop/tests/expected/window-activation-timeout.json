@@ -1,0 +1,14 @@
+[
+  {
+    "type": "window-activated",
+    "requestId": 1,
+    "error": "confirmation expired",
+    "errorCode": "activation-timeout"
+  },
+  {
+    "type": "window-activated",
+    "requestId": 2,
+    "error": "confirmation expired",
+    "errorCode": "activation-timeout"
+  }
+]
