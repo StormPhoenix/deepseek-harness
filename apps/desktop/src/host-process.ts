@@ -6,6 +6,7 @@ import { z } from 'zod'
 import type { PlatformSession } from '@deepseek-ai/dsh-deepseek-account'
 import { desktopNodeEnvironment } from './node-environment.ts'
 import { parsePluginOperationRecord, type PluginOperationRecord, type PluginOperationRunId } from '@deepseek-ai/dsh-plugin-manager/diagnostic'
+import { DesktopWindowActivationError, type DesktopWindowActivationErrorCode } from './window-activation.ts'
 
 interface ReadyEvent {
   readonly type: 'ready'
@@ -192,8 +193,8 @@ export class DesktopHostProcess {
    * @param packageManager - Bundled pnpm entry and Node launcher directory, scoped to package operations.
    * @param onPlatformSession - Private credential updates for embedded Platform views.
    * @param onPluginOperation - Optional diagnostic sink; malformed records are ignored without failing the Host.
-   * @param onActivateWindow - Restore/show/focus the selected shell window or initiate its recreation synchronously;
-   *   throw when activation is unavailable. Success does not guarantee operating-system foreground focus.
+   * @param onActivateWindow - Confirm activation of the selected shell window before replying;
+   *   throw or reject on failure. The shell owns the confirmation deadline and cleanup.
    */
   constructor(
     private readonly node: string,
@@ -207,7 +208,7 @@ export class DesktopHostProcess {
 
     private readonly onPlatformSession?: (session: PlatformSession | null) => void,
     private readonly onPluginOperation?: (record: PluginOperationRecord) => void,
-    private readonly onActivateWindow?: () => void,
+    private readonly onActivateWindow?: () => void | Promise<void>,
   ) {}
 
   /**
@@ -217,9 +218,12 @@ export class DesktopHostProcess {
   async start(): Promise<DesktopHostReady> {
     if (this.child !== undefined) return this.readyPromise
     const entry = join(this.runtimeDir, 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'index.js')
-    const environment = desktopNodeEnvironment(this.node, undefined, this.environment)
-    delete environment.DSH_DESKTOP_WINDOW_ACTIVATION
-    if (process.platform === 'win32' && this.onActivateWindow !== undefined) environment.DSH_DESKTOP_WINDOW_ACTIVATION = '1'
+    const environment = Object.fromEntries(Object.entries(desktopNodeEnvironment(this.node, undefined, this.environment))
+      .filter(([key]) => !['DSH_DESKTOP_WINDOW_ACTIVATION', 'DSH_DESKTOP_WINDOW_ACTIVATION_PID'].includes(key.toUpperCase())))
+    if (process.platform === 'win32' && this.onActivateWindow !== undefined) {
+      environment.DSH_DESKTOP_WINDOW_ACTIVATION = '1'
+      environment.DSH_DESKTOP_WINDOW_ACTIVATION_PID = String(process.pid)
+    }
     const child = spawn(this.node, [
       '--expose-internals',
       ...(this.inspectPort === undefined ? [] : [`--inspect=127.0.0.1:${String(this.inspectPort)}`]),
@@ -262,7 +266,7 @@ export class DesktopHostProcess {
         else this.fail(new Error('dsh desktop host acknowledged an unrequested shutdown'))
       }
       else if (message.type === 'fatal') this.fail(new DesktopHostFatalError(message.message, message.diagnostic))
-      else if (message.type === 'activate-window') this.activateWindow(child, message.requestId)
+      else if (message.type === 'activate-window') void this.activateWindow(child, message.requestId)
       else {
         const request = this.controlRequests.get(message.requestId)
         if (message.error === undefined) request?.resolve(message)
@@ -317,19 +321,28 @@ export class DesktopHostProcess {
     return response.resource
   }
 
-  private activateWindow(child: ChildProcess, requestId: number): void {
+  private async activateWindow(child: ChildProcess, requestId: number): Promise<void> {
     if (!child.connected) return
     let error: string | undefined
+    let errorCode: DesktopWindowActivationErrorCode | undefined
+    const unavailable = (): boolean => this.stopping || this.failureReported
+    const connected = (): boolean => child.connected
     try {
       if (this.stopping || this.failureReported || this.onActivateWindow === undefined) {
-        throw new Error('desktop window activation is unavailable')
+        throw new DesktopWindowActivationError('unavailable', 'desktop window activation is unavailable')
       }
-      this.onActivateWindow()
+      await this.onActivateWindow()
+      if (unavailable()) {
+        throw new DesktopWindowActivationError('unavailable', 'desktop window activation is unavailable')
+      }
     } catch (activationError) {
       error = activationError instanceof Error ? activationError.message : String(activationError)
+      errorCode = activationError instanceof DesktopWindowActivationError ? activationError.code : undefined
     }
+    if (!connected()) return
     try {
-      child.send({ type: 'window-activated', requestId, ...error === undefined ? {} : { error } }, (sendError) => {
+      child.send({ type: 'window-activated', requestId, ...error === undefined ? {} : { error },
+        ...errorCode === undefined ? {} : { errorCode } }, (sendError) => {
         // A disconnect can precede child.connected changing; child exit owns transport failure reporting.
         if (sendError !== null) return
       })
