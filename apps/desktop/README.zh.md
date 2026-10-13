@@ -66,7 +66,7 @@ macOS 安装会创建 `/usr/local/bin/dsh`；目录权限需要时，系统会�
 
 ## 关闭窗口与退出
 
-在 Windows 上，当 `DSH_DESKTOP_WINDOW_ACTIVATION=1` 时，Host 插件可以通过私有子进程 IPC 通道请求激活窗口。壳接受带正安全整数 ID 的 `{ type: 'activate-window', requestId }`，并返回 `{ type: 'window-activated', requestId, error? }`。壳恢复、显示并聚焦当前选定窗口，保留欢迎页和强制更新的优先级；窗口缺失时启动重建。启动尚未选定窗口、故障恢复和退出期间会拒绝激活，但不会因此停止 Host。成功应答只确认壳已执行操作，不代表导航已完成，也不保证在 Windows 限制下获得前台焦点。Desktop 源码修改需要构建并完整重启应用；仅重载渲染页面不生效。
+在 Windows 上，Desktop 在 Host 环境中设置 `DSH_DESKTOP_WINDOW_ACTIVATION=1`，并将 `DSH_DESKTOP_WINDOW_ACTIVATION_PID` 设为自身的正 uint32 进程 ID。Host 插件通过私有子进程 IPC 通道发送 `{ type: 'activate-window', requestId }` 前，接收用户输入的 helper 必须调用 `AllowSetForegroundWindow`，只向该精确 PID 授予前台权限，不得向所有进程授权。请求 ID 为正安全整数。壳异步返回 `{ type: 'window-activated', requestId, error?, errorCode? }`；成功表示在包含缺失窗口准备的总计 1000 ms 时限内，已确认选定窗口可见、未最小化且获得焦点。强制更新和 Welcome 窗口优先于工作区。激活仅尝试一次恢复、显示和聚焦，不重试，也不改变置顶状态。启动尚未选定窗口、故障恢复、退出或选定窗口失效时返回 `unavailable`；窗口状态未确认时返回 `activation-timeout`，若已可见且未最小化但未获得焦点，则返回 `focus-denied`。这些失败不会停止 Host。Desktop 源码修改需要完整重新构建并重启应用；仅重载渲染页面不生效。依赖该 PID 的外部插件必须[与 Desktop 协同升级并重启](../../docs/upgrade-guide/v0.2.1-alpha.2/desktop-window-activation/guide.zh.md)。
 
 关闭主窗口（macOS 的关闭按钮和 ⌘W；Windows 的 ×、Alt+F4 和任务栏"关闭窗口"）会隐藏窗口；Windows 首次隐藏前需要确认。页面和 Host 继续运行，任务不受影响，下次显示时仍是原来的文档，会话、草稿和滚动位置都保留；macOS 全屏窗口先退出全屏再隐藏。macOS 通过 Dock 图标、再次启动或 `dsh://open` 找回窗口，Windows 通过托盘找回。最小化行为不变。进入工作区前关闭欢迎窗口，Windows 上走退出流程，macOS 上应用留在 Dock 中且没有窗口。
 
