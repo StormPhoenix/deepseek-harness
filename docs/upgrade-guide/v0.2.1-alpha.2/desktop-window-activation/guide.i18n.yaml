@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.1-alpha.2/desktop-window-activation/guide.md
+/:
+  en: f9d5cddc430932f7
+  zh: cbcff70326538be4
+/windows-desktop-activation-requires-coordinated-upgrades:
+  en: 3c87833730e59021
+  zh: 94c0195cff518fd7
+/windows-desktop-activation-requires-coordinated-upgrades/change:
+  en: 9f268cea9f44149a
+  zh: 78c5b525f9c0f098
+/windows-desktop-activation-requires-coordinated-upgrades/migration:
+  en: bef5e13a833f0717
+  zh: 475b2123b4ec0e3a

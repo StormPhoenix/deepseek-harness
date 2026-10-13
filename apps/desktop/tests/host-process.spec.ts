@@ -91,7 +91,7 @@ const ACTIVATION_HOST = HTTP_HOST.replace("  if (request.url === '/fatal') {", `
   }
   if (request.url === '/fatal') {`)
 
-function activationHost(source: string, activate?: () => void, environment = process.env): DesktopHostProcess {
+function activationHost(source: string, activate?: () => void | Promise<void>, environment = process.env): DesktopHostProcess {
   const runtime = projectWithHost(source)
   const host = new DesktopHostProcess(process.execPath, runtime, runtime, undefined, environment,
     undefined, undefined, undefined, undefined, activate)
@@ -114,12 +114,37 @@ it('correlates activation replies separately from shell controls without interru
   await host.stop(true)
 })
 
+it('waits for asynchronous activation replies while shell controls remain responsive', async () => {
+  const pending: (() => void)[] = []
+  const host = activationHost(ACTIVATION_HOST, () => new Promise<void>((resolve) => { pending.push(resolve) }))
+  const { url } = await host.start()
+  let replied = false
+  const response = fetch(new URL('/activate', url)).then((value) => { replied = true; return value })
+  await vi.waitFor(() => { expect(pending).toHaveLength(2) })
+  expect(replied).toBe(false)
+  expect(await host.updateTasks('inspect')).toBe(false)
+  pending[0]!()
+  pending[1]!()
+  expect(await (await response).json()).toEqual([
+    { type: 'window-activated', requestId: 1 }, { type: 'window-activated', requestId: 2 },
+  ])
+})
+
+it('contains asynchronous callback rejection and retains structured failure identity', async () => {
+  const { DesktopWindowActivationError } = await import('../src/window-activation.ts')
+  const host = activationHost(ACTIVATION_HOST, async () => { throw new DesktopWindowActivationError('activation-timeout', 'confirmation expired') })
+  const { url } = await host.start()
+  const replies: unknown = await (await fetch(new URL('/activate', url))).json()
+  await expect(JSON.stringify(replies, null, 2) + '\n').toMatchFileSnapshot('./expected/window-activation-timeout.json')
+  expect(await host.updateTasks('inspect')).toBe(false)
+})
+
 it.each([false, true])('answers unavailable or throwing activation without killing the Host: callback %s', async (provided) => {
   const host = activationHost(ACTIVATION_HOST, provided ? () => { throw new Error('activation refused') } : undefined)
   const { url } = await host.start()
   expect(await (await fetch(new URL('/activate', url))).json()).toEqual([
-    { type: 'window-activated', requestId: 1, error: provided ? 'activation refused' : 'desktop window activation is unavailable' },
-    { type: 'window-activated', requestId: 2, error: provided ? 'activation refused' : 'desktop window activation is unavailable' },
+    { type: 'window-activated', requestId: 1, error: provided ? 'activation refused' : 'desktop window activation is unavailable', ...provided ? {} : { errorCode: 'unavailable' } },
+    { type: 'window-activated', requestId: 2, error: provided ? 'activation refused' : 'desktop window activation is unavailable', ...provided ? {} : { errorCode: 'unavailable' } },
   ])
   expect(await host.updateTasks('inspect')).toBe(false)
   await host.stop(true)
@@ -138,10 +163,13 @@ it('continues rejecting unknown Host events', async () => {
 it.each(['win32', 'darwin', 'linux'])('advertises activation only with a Windows callback: %s', async (platform) => {
   vi.stubGlobal('process', { ...process, platform })
   for (const provided of [false, true]) {
-    const host = activationHost(HTTP_HOST.replace('runtime: process.argv[2]', 'activation: process.env.DSH_DESKTOP_WINDOW_ACTIVATION ?? null, runtime: process.argv[2]'),
-      provided ? vi.fn() : undefined, { ...process.env, DSH_DESKTOP_WINDOW_ACTIVATION: '1' })
+    const host = activationHost(HTTP_HOST.replace('runtime: process.argv[2]', 'activation: process.env.DSH_DESKTOP_WINDOW_ACTIVATION ?? null, activationPid: process.env.DSH_DESKTOP_WINDOW_ACTIVATION_PID ?? null, runtime: process.argv[2]'),
+      provided ? vi.fn() : undefined, { ...process.env, DSH_DESKTOP_WINDOW_ACTIVATION: '1', DSH_DESKTOP_WINDOW_ACTIVATION_PID: '123' })
     const { url } = await host.start()
-    expect(await (await fetch(url)).json()).toMatchObject({ activation: platform === 'win32' && provided ? '1' : null })
+    expect(await (await fetch(url)).json()).toMatchObject({
+      activation: platform === 'win32' && provided ? '1' : null,
+      activationPid: platform === 'win32' && provided ? String(process.pid) : null,
+    })
     await host.stop(true)
   }
 })

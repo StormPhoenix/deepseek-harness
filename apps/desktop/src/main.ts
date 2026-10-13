@@ -62,6 +62,7 @@ import { DesktopQuitConfirmation } from './quit-confirmation.ts'
 import { DesktopTray } from './tray.ts'
 import { DesktopBackgroundNotice } from './background-notice.ts'
 import { DesktopWindowPin, installDesktopWindowPin } from './always-on-top.ts'
+import { confirmDesktopWindowActivation, DesktopWindowActivationError } from './window-activation.ts'
 
 let focusPrimaryWindow = (): void => {}
 let stopForRecovery = async (): Promise<void> => {}
@@ -449,16 +450,7 @@ async function main(): Promise<void> {
     const host = new DesktopHostProcess(resources.node, resources.dsh, activeProject,
       hostInspectPort, { ...hostEnvironment, DSH_CLIENT_VERSION: desktopClientVersion() }, onFailure,
       primaryRuntime,
-      resources, (next) => { platformView.setSession(next) }, () => {
-        const recovering = (): boolean => recovery.active
-        if (quitting || shuttingDown || recovering()
-          || (isMandatory() ? mandatoryUI === undefined
-            : !enteredWorkspace && (welcomeWindow === undefined || welcomeWindow.isDestroyed()))) {
-          throw new Error('desktop window activation is unavailable')
-        }
-        focusPrimaryWindow()
-        if (recovering()) throw new Error('desktop window activation failed')
-      })
+      resources, (next) => { platformView.setSession(next) }, () => activatePrimaryWindow())
     return {
       start: async () => {
         const ready = await host.start()
@@ -1227,6 +1219,38 @@ async function main(): Promise<void> {
     } else {
       await enterWorkspace()
     }
+  }
+  let primaryActivation: Promise<void> | undefined
+  const activatePrimaryWindow = (): Promise<void> => {
+    if (primaryActivation !== undefined) return primaryActivation
+    let selected: BrowserWindow | undefined
+    const available = (): boolean => !quitting && !shuttingDown && !recovery.active
+      && (selected === undefined || (isMandatory() ? mandatoryUI?.confirmationWindow === selected
+        : selected === (welcomeWindow ?? mainWindow) && (selected !== mainWindow || enteredWorkspace)))
+    const activation = confirmDesktopWindowActivation(() => {
+      if (!available()) throw new DesktopWindowActivationError('unavailable', 'desktop window activation is unavailable')
+      if (isMandatory()) selected = mandatoryUI?.confirmationWindow
+      else if (welcomeWindow !== undefined && !welcomeWindow.isDestroyed()) selected = welcomeWindow
+      else if (enteredWorkspace) {
+        if (mainWindow === undefined || mainWindow.isDestroyed()) {
+          try { selected = createMainWindow() } catch (error) { reportFatal(error, 'main'); throw error }
+          const window = selected
+          return navigateMain(applicationUrl).then(() => window, (error: unknown) => { reportFatal(error, 'main'); throw error })
+        }
+        selected = mainWindow
+      }
+      if (selected === undefined) throw new DesktopWindowActivationError('unavailable', 'desktop window activation is unavailable')
+      return selected
+    }, (window) => {
+      if (isMandatory()) { mandatoryUI?.focus(); return }
+      if (window.isMinimized()) window.restore()
+      window.show()
+      window.focus()
+    }, available)
+    primaryActivation = activation
+    const clear = (): void => { if (primaryActivation === activation) primaryActivation = undefined }
+    void activation.then(clear, clear)
+    return activation
   }
   focusPrimaryWindow = () => {
     if (quitting) return
