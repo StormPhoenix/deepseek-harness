@@ -182,6 +182,7 @@ function mount(
       ok: true, value: { id: expected.id, updated: false, record: expected },
     })),
     onOpenSession: vi.fn(),
+    onRun: vi.fn<TaskManagerPageProps['onRun']>(async () => ({ ran: true })),
     loadHistory: vi.fn<TaskManagerPageProps['loadHistory']>(async ({ id }) => {
       const receipt = snapshot.records.find(record => record.id === id)?.lastDelivery
       return { ok: true, value: {
@@ -671,7 +672,9 @@ describe('Task manager catalog', () => {
     expect(screen.queryByText('session-gamma')).toBeNull()
     expect(screen.getAllByText('Once')).toHaveLength(2)
     expect(screen.getByText('Every 301 seconds')).toBeDefined()
-    expect(screen.queryByRole('button', { name: /create|new task|pause|resume|edit|run now|history/i })).toBeNull()
+    // The list itself carries no task actions: running now belongs to the selected
+    // task's detail heading, which this suite reaches through its own cases.
+    expect(screen.queryByRole('button', { name: /create|new task|pause|resume|edit|history/i })).toBeNull()
     expect(screen.queryByRole('complementary')).toBeNull()
     fireEvent.keyDown(screen.getByRole('searchbox'), { key: 'Escape' })
     expect(taskNames()).toHaveLength(3)

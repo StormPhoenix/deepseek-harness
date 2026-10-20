@@ -4,7 +4,7 @@ import type { RemoteResult } from '@deepseek-ai/dsh-api-remotes/client'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   Button, IconChevronDownOutlineRegular, IconChevronUpOutlineRegular, IconClockOutlineRegular, IconInfoOutlineRegular,
-  IconWarningOutlineRegular, StateDot, Tooltip,
+  IconWarningOutlineRegular, Pill, StateDot, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ScheduleDeliveryHistoryRequest, ScheduleDeliveryHistoryResult } from '@deepseek-ai/dsh-schedule/client'
 import { formatScheduleNextRun } from './schedule-format.ts'
@@ -153,7 +153,13 @@ export function DeliveryHistory({ id, sessionId, latestMessageId, timeZone, load
         <div className={css.deliveryBody}>
           <div className={css.deliveryHead}>
             <time className={css.deliveryTime} dateTime={record.scheduledAt}>{formatOccurrence(record.scheduledAt)}</time>
+            {/* A manual run delivers the armed target early, so the row states both
+                that target and the moment the message actually reached the Session. */}
+            {record.manual === true && <Pill>{t('delivery.manual')}</Pill>}
           </div>
+          {record.manual === true && <p className={css.deliveryDeliveredAt}>
+            {t('delivery.deliveredAt', { time: formatOccurrence(record.deliveredAt) })}
+          </p>}
           {record.prompt !== undefined && <SavedPrompt prompt={record.prompt} t={t} />}
         </div>
       </section>)}

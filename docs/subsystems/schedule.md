@@ -316,12 +316,18 @@ The Remote `schedule.catalog()` method returns active and inactive Host tasks wi
 ```ts type-equiv
 /** Durable Session inbox delivery acknowledgment, not model execution completion. */
 interface ScheduleDeliveryReceipt {
-  /** Canonical UTC target of the delivered occurrence. */
+  /** Canonical UTC target of the delivered occurrence, or the plan a manual run delivered under. */
   readonly scheduledAt: string
   /** Canonical UTC time sampled after Session persistence acknowledged delivery. */
   readonly deliveredAt: string
   /** Identity of the delivered message, shared by tasks in one recurring batch. */
   readonly messageId: MessageId
+  /**
+   * Person-triggered run of the stored instruction; absent means the rule's own
+   * schedule delivered it. A manual run never advances or retires the rule, so
+   * the receipt's `scheduledAt` still names the plan that remains armed.
+   */
+  readonly manual?: true
 }
 ```
 
@@ -437,6 +443,29 @@ Plugin-sourced `followup()` synchronously appends the message to the Session inb
 
 A failure to resolve the Session, enqueue the message, or confirm persistence leaves the task stored and reports a Host warning. A later management change or Host restart retries it. Session persistence and the task put are not atomic across stores. A crash after inbox persistence but before the task put can repeat delivery; the receipt does not close this gap. Schedule provides no model-result acknowledgement, execution cancellation, or external notification channel.
 
+## Immediate runs
+
+`schedule.run({ sessionId, id })` delivers one active task's stored instruction now, from the same serialized queue dispatch and management writes use. It renders the same framing, appends the same `followup()` message, and requires the same Session flush, so the Session reacts exactly as it does to a due task. It consumes no occurrence: `status` and `scheduledAt` are untouched and the timer is not recomputed, so the plan stays armed and the task still fires at its committed time. The saved receipt carries `manual: true` and the committed target it ran under, which is what lets the records view tell a person's run apart from a scheduled delivery; retention prunes it like any other receipt. A missing or mismatched binding returns `schedule_not_found`, an inactive task returns `schedule_ended`, a delegated child's Session returns `subagent_session`, and an original Session that cannot be resolved returns `session_unavailable`. The method adds no model-visible surface: the delivered message is the ordinary reminder framing, and no model tool wraps it.
+
+```ts type-equiv
+/** Immediate-run request within the original Session binding. */
+interface ScheduleRunRequest extends ScheduleListRequest {
+  /** Task whose stored instruction is delivered now. */
+  readonly id: ScheduleId
+}
+```
+
+```ts type-equiv
+/**
+ * Non-mutating immediate-run outcome: the rule, its committed target, and its
+ * status are unchanged; the delivery itself is recorded as a manual receipt.
+ */
+type ScheduleRunResult =
+  | { readonly id: ScheduleId; readonly ran: true; readonly deliveredAt: string }
+  | { readonly id: ScheduleId; readonly ran: false; readonly code: 'schedule_not_found' | 'schedule_ended' | 'session_unavailable' }
+  | SubagentSessionError
+```
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -523,6 +552,20 @@ async create(sessionId: SessionId, request: ScheduleCreateRequest, signal?: Abor
  * Storage and lifecycle failures reject; cancellation after a write starts does not roll it back.
  */
 @Remote('update') async update(request: ScheduleUpdateRequest, signal?: AbortSignal): Promise<ScheduleUpdateResult>
+
+/**
+ * Deliver one active task's stored instruction now without advancing or ending it.
+ *
+ * The run reuses the dispatch pipeline, so the Session receives the same framing,
+ * the same inbox splice, and the same persistence acknowledgment a due task gets.
+ * Only the bookkeeping differs: the record keeps its committed target and status,
+ * and the delivery is saved as a manual receipt, which the records view tells
+ * apart from a scheduled occurrence. Nothing reaches the model as a new surface.
+ * @param request - Task binding whose stored instruction is delivered now.
+ * @param signal - Optional cancellation checked before delivery begins, including after FIFO waits.
+ * @returns The acknowledgment, or a non-mutating lookup/ended/unavailable result.
+ */
+@Remote('run') async run(request: ScheduleRunRequest, signal?: AbortSignal): Promise<ScheduleRunResult>
 ```
 
 Types: [SessionId](core.md)

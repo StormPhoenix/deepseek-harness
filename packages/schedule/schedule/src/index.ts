@@ -9,7 +9,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionActivity } from '@deepseek-ai/dsh-workspace'
 import { ScheduleRuntime } from './runtime.ts'
 import { scheduleDomain } from './storage.ts'
-import { deliveryHistoryPage } from './delivery-history.ts'
+import { appendDelivery, deliveryHistoryPage, publicReceipt } from './delivery-history.ts'
 import { resolveScheduleUpdate } from './update.ts'
 import {
   foldScheduleEvents, ScheduleInputError, ScheduleLogError, ScheduleId, createAfterScheduleRecord, createAtScheduleRecord,
@@ -19,7 +19,7 @@ import {
 import type {
   DeliveryRetentionBounds, ScheduleCatalogEntry, ScheduleCreateRequest, ScheduleDeleteRequest, ScheduleDeleteResult,
   ScheduleDeliveryHistoryRequest, ScheduleDeliveryHistoryResult, ScheduleListRequest, ScheduleRecord,
-  ScheduleUpdateRequest, ScheduleUpdateResult, SubagentSessionError,
+  ScheduleRunRequest, ScheduleRunResult, ScheduleUpdateRequest, ScheduleUpdateResult, SubagentSessionError,
 } from './types.ts'
 
 export type * from './types.ts'
@@ -287,7 +287,7 @@ export class ScheduleService extends TypertRemoteService {
     return [...domain.table('tasks').entries()]
       .map(([, task]) => ({
         ...task.record, sessionId: task.sessionId, status: task.status,
-        ...(task.lastDelivery === undefined ? {} : { lastDelivery: task.lastDelivery }),
+        ...(task.lastDelivery === undefined ? {} : { lastDelivery: publicReceipt(task.lastDelivery) }),
       }))
       .sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt) || a.id.localeCompare(b.id))
   }
@@ -370,6 +370,50 @@ export class ScheduleService extends TypertRemoteService {
       this.emitChanged()
       this.runtime?.requestDrive()
       return result
+    })
+  }
+
+  /**
+   * Deliver one active task's stored instruction now without advancing or ending it.
+   *
+   * The run reuses the dispatch pipeline, so the Session receives the same framing,
+   * the same inbox splice, and the same persistence acknowledgment a due task gets.
+   * Only the bookkeeping differs: the record keeps its committed target and status,
+   * and the delivery is saved as a manual receipt, which the records view tells
+   * apart from a scheduled occurrence. Nothing reaches the model as a new surface.
+   * @param request - Task binding whose stored instruction is delivered now.
+   * @param signal - Optional cancellation checked before delivery begins, including after FIFO waits.
+   * @returns The acknowledgment, or a non-mutating lookup/ended/unavailable result.
+   */
+  @Remote('run')
+  async run(request: ScheduleRunRequest, signal?: AbortSignal): Promise<ScheduleRunResult> {
+    return this.serialize<ScheduleRunResult>(async () => {
+      const refusal = this.reminderTargetRefusal(request.sessionId)
+      if (refusal !== undefined) return refusal
+      const tasks = (await this.getDomain()).table('tasks')
+      signal?.throwIfAborted()
+      const task = tasks.get(request.id)
+      if (task === undefined || task.sessionId !== request.sessionId) {
+        return { id: request.id, ran: false, code: 'schedule_not_found' }
+      }
+      if (task.status === 'inactive') return { id: request.id, ran: false, code: 'schedule_ended' }
+      const runtime = this.runtime
+      /* v8 ignore next 2 -- getDomain() awaits initialization, which always constructs the runtime. */
+      if (runtime === undefined) throw new Error('schedule: the runtime is not available')
+      const delivery = await runtime.deliverNow(task)
+      if (!delivery.delivered) return { id: request.id, ran: false, code: 'session_unavailable' }
+      await tasks.put(task.record.id, {
+        ...task,
+        ...appendDelivery(task, {
+          scheduledAt: task.record.scheduledAt,
+          deliveredAt: delivery.deliveredAt,
+          messageId: delivery.messageId,
+          manual: true,
+        }, this.retention),
+      })
+      // Only the saved delivery changed: the plan stays armed, so the timer needs no recomputation.
+      this.emitChanged()
+      return { id: request.id, ran: true, deliveredAt: delivery.deliveredAt }
     })
   }
 

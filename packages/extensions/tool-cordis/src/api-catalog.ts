@@ -2051,6 +2051,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'request', description: 'Task binding, complete observed record, and any combination of timing, name, and instruction.' }, { name: 'signal', description: 'Cancellation checked after domain readiness and FIFO waits, before persistence begins.' }],
         returns: 'The committed record, unchanged record for a no-op, or a non-mutating input/lookup/conflict/refusal result. Storage and lifecycle failures reject; cancellation after a write starts does not roll it back.',
       },
+      {
+        signature: '@Remote(\'run\') async run(request: ScheduleRunRequest, signal?: AbortSignal): Promise<ScheduleRunResult>',
+        description: 'Deliver one active task\'s stored instruction now without advancing or ending it.\n\nThe run reuses the dispatch pipeline, so the Session receives the same framing, the same inbox splice, and the same persistence acknowledgment a due task gets. Only the bookkeeping differs: the record keeps its committed target and status, and the delivery is saved as a manual receipt, which the records view tells apart from a scheduled occurrence. Nothing reaches the model as a new surface.',
+        parameters: [{ name: 'request', description: 'Task binding whose stored instruction is delivered now.' }, { name: 'signal', description: 'Optional cancellation checked before delivery begins, including after FIFO waits.' }],
+        returns: 'The acknowledgment, or a non-mutating lookup/ended/unavailable result.',
+      },
     ],
   },
   {
@@ -6895,7 +6901,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ScheduleDeliveryReceipt',
-    declaration: 'export interface ScheduleDeliveryReceipt {\n    readonly scheduledAt: string;\n    readonly deliveredAt: string;\n    readonly messageId: MessageId;\n}',
+    declaration: 'export interface ScheduleDeliveryReceipt {\n    readonly scheduledAt: string;\n    readonly deliveredAt: string;\n    readonly messageId: MessageId;\n    readonly manual?: true;\n}',
   },
   {
     name: 'ScheduleDeliveryRecord',
@@ -6920,6 +6926,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ScheduleRecord',
     declaration: 'export type ScheduleRecord = OneShotScheduleRecord | RecurringScheduleRecord;',
+  },
+  {
+    name: 'ScheduleRunRequest',
+    declaration: 'export interface ScheduleRunRequest extends ScheduleListRequest {\n    readonly id: ScheduleId;\n}',
+  },
+  {
+    name: 'ScheduleRunResult',
+    declaration: 'export type ScheduleRunResult = {\n    readonly id: ScheduleId;\n    readonly ran: true;\n    readonly deliveredAt: string;\n} | {\n    readonly id: ScheduleId;\n    readonly ran: false;\n    readonly code: \'schedule_not_found\' | \'schedule_ended\' | \'session_unavailable\';\n} | SubagentSessionError;',
   },
   {
     name: 'ScheduleTimingChange',

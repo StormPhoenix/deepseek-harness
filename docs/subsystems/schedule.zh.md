@@ -316,12 +316,18 @@ Remote 方法 `schedule.catalog()` 返回活动和未运行的宿主任务及其
 ```ts type-equiv
 /** Durable Session inbox delivery acknowledgment, not model execution completion. */
 interface ScheduleDeliveryReceipt {
-  /** Canonical UTC target of the delivered occurrence. */
+  /** Canonical UTC target of the delivered occurrence, or the plan a manual run delivered under. */
   readonly scheduledAt: string
   /** Canonical UTC time sampled after Session persistence acknowledged delivery. */
   readonly deliveredAt: string
   /** Identity of the delivered message, shared by tasks in one recurring batch. */
   readonly messageId: MessageId
+  /**
+   * Person-triggered run of the stored instruction; absent means the rule's own
+   * schedule delivered it. A manual run never advances or retires the rule, so
+   * the receipt's `scheduledAt` still names the plan that remains armed.
+   */
+  readonly manual?: true
 }
 ```
 
@@ -437,6 +443,29 @@ type ScheduleDeliveryHistoryResult =
 
 Session 获取、消息入队或持久化确认失败时，任务继续保存在存储中，并报告宿主警告。后续管理变更或宿主重启会重试。Session 持久化与任务 put 不具有跨存储原子性。收件箱已持久化、任务尚未 put 时发生崩溃，可能重复投递；回执并未消除这一间隔。Schedule 不提供模型结果回执、执行取消或外部通知渠道。
 
+## 立即运行
+
+`schedule.run({ sessionId, id })` 立即投递某个活动任务已保存的指令，并与调度投递及管理写入共用同一条串行队列。它渲染相同的框架文本、追加相同的 `followup()` 消息，并要求相同的 Session flush，因此 Session 的反应与到期任务完全一致。它不消耗任何一次发生：`status` 与 `scheduledAt` 均不变，定时器也不重算，计划保持装载状态，任务仍会在既定时刻触发。保存的回执带有 `manual: true` 以及它执行时所依据的已提交目标，运行记录视图据此区分人工运行与计划投递；保留规则与其他回执一样裁剪它。任务不存在或绑定不符返回 `schedule_not_found`，已结束任务返回 `schedule_ended`，委派子代理的 Session 返回 `subagent_session`，无法取得原 Session 返回 `session_unavailable`。该方法不新增任何模型可见面：投递的消息就是常规提醒框架，也没有模型工具包装它。
+
+```ts type-equiv
+/** Immediate-run request within the original Session binding. */
+interface ScheduleRunRequest extends ScheduleListRequest {
+  /** Task whose stored instruction is delivered now. */
+  readonly id: ScheduleId
+}
+```
+
+```ts type-equiv
+/**
+ * Non-mutating immediate-run outcome: the rule, its committed target, and its
+ * status are unchanged; the delivery itself is recorded as a manual receipt.
+ */
+type ScheduleRunResult =
+  | { readonly id: ScheduleId; readonly ran: true; readonly deliveredAt: string }
+  | { readonly id: ScheduleId; readonly ran: false; readonly code: 'schedule_not_found' | 'schedule_ended' | 'session_unavailable' }
+  | SubagentSessionError
+```
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -523,6 +552,20 @@ async create(sessionId: SessionId, request: ScheduleCreateRequest, signal?: Abor
  * Storage and lifecycle failures reject; cancellation after a write starts does not roll it back.
  */
 @Remote('update') async update(request: ScheduleUpdateRequest, signal?: AbortSignal): Promise<ScheduleUpdateResult>
+
+/**
+ * Deliver one active task's stored instruction now without advancing or ending it.
+ *
+ * The run reuses the dispatch pipeline, so the Session receives the same framing,
+ * the same inbox splice, and the same persistence acknowledgment a due task gets.
+ * Only the bookkeeping differs: the record keeps its committed target and status,
+ * and the delivery is saved as a manual receipt, which the records view tells
+ * apart from a scheduled occurrence. Nothing reaches the model as a new surface.
+ * @param request - Task binding whose stored instruction is delivered now.
+ * @param signal - Optional cancellation checked before delivery begins, including after FIFO waits.
+ * @returns The acknowledgment, or a non-mutating lookup/ended/unavailable result.
+ */
+@Remote('run') async run(request: ScheduleRunRequest, signal?: AbortSignal): Promise<ScheduleRunResult>
 ```
 
 Types: [SessionId](core.zh.md)

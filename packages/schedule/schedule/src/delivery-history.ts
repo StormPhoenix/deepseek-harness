@@ -1,6 +1,26 @@
 /** Saved delivery interpretation and identity-based pagination without Session reads. */
 import type { ScheduleTask } from './storage.ts'
-import type { DeliveryRetentionBounds, ScheduleDeliveryHistoryRequest, ScheduleDeliveryHistoryResult, ScheduleDeliveryReceipt } from './types.ts'
+import type {
+  DeliveryRetentionBounds, ScheduleDeliveryHistoryRequest, ScheduleDeliveryHistoryResult, ScheduleDeliveryReceipt,
+} from './types.ts'
+
+/**
+ * Project one stored receipt onto the browser-safe shape.
+ *
+ * Storage decodes an absent marker as `undefined`, while the public contract
+ * states absence by omitting the member: copying it through would widen `manual`
+ * to `true | undefined` for every consumer that reads the receipt.
+ * @param receipt - Receipt read from a stored task row.
+ * @returns The receipt with `manual` present only on a person-triggered run.
+ */
+export function publicReceipt(receipt: NonNullable<ScheduleTask['lastDelivery']>): ScheduleDeliveryReceipt {
+  return {
+    scheduledAt: receipt.scheduledAt,
+    deliveredAt: receipt.deliveredAt,
+    messageId: receipt.messageId,
+    ...(receipt.manual === undefined ? {} : { manual: true }),
+  }
+}
 
 /** Milliseconds in one day, the unit the retention window is stated in. */
 const DAY_MS = 86_400_000
@@ -65,8 +85,10 @@ export function deliveryHistoryPage(
     : history.records.findIndex(record => record.messageId === request.before)
   if (end === -1) return { id: request.id, code: 'delivery_cursor_not_found' }
   const start = Math.max(0, end - request.limit)
-  const records = history.records.slice(start, end).reverse().map(({ prompt, ...receipt }) => ({
-    ...receipt, ...(prompt === undefined ? {} : { prompt }),
+  const records = history.records.slice(start, end).reverse().map(({ prompt, manual, ...receipt }) => ({
+    ...receipt,
+    ...(prompt === undefined ? {} : { prompt }),
+    ...(manual === undefined ? {} : { manual }),
   }))
   const oldest = records.at(-1)
   return {

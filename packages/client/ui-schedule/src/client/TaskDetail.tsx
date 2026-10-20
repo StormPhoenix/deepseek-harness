@@ -6,7 +6,8 @@ import clsx from 'clsx'
 import {
   Button, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular, IconChevronUpOutlineRegular,
   IconClockOutlineRegular, IconCloseOutlineRegular,
-  IconEllipsisOutlineRegular, IconTrashOutlineRegular, Modal, Pill, ReferenceIconRegular, Tooltip,
+  IconEllipsisOutlineRegular, IconPlayOutlineRegular, IconTrashOutlineRegular, Modal, Pill, ReferenceIconRegular,
+  Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RemoteResult } from '@deepseek-ai/dsh-api-remotes/client'
@@ -92,6 +93,23 @@ const LOCAL_FAILURES: ReadonlySet<TaskManagerKey> = new Set<TaskManagerKey>([
   'rule.invalidTitle', 'rule.invalidPrompt', 'timing.invalidInterval', 'rule.cronInvalid', 'timing.invalid',
 ])
 
+/** Why an immediate run delivered nothing, as this detail states it. */
+export type ScheduleRunFailure = 'notFound' | 'ended' | 'subagent' | 'session' | 'unknown'
+
+/** One immediate run's settled outcome: the reminder reached its Session, or the stable refusal. */
+export type ScheduleRunOutcome =
+  | { readonly ran: true }
+  | { readonly ran: false; readonly code: ScheduleRunFailure }
+
+/** Copy of each immediate-run refusal. */
+const RUN_FAILURE_KEYS: Record<ScheduleRunFailure, TaskManagerKey> = {
+  notFound: 'run.error.notFound',
+  ended: 'run.error.ended',
+  subagent: 'run.error.subagent',
+  session: 'run.error.session',
+  unknown: 'run.error.unknown',
+}
+
 /** Elapsed interval a rule receives when it starts repeating without a stored interval. */
 const RULE_DEFAULT_EVERY_SECONDS = 3_600
 
@@ -176,6 +194,13 @@ export interface TaskDetailInjected extends DeliveryHistoryInjected, TaskTimingI
    * @param id - Session bound to the shown task.
    */
   readonly onOpenSession: (id: SessionId) => void
+  /**
+   * Run the shown task once now without changing its committed plan.
+   * @param id - Task shown in this detail.
+   * @param sessionId - That task's original Session binding.
+   * @returns Whether the reminder reached its Session, or the stable refusal.
+   */
+  readonly onRun: (id: ScheduleId, sessionId: SessionId) => Promise<ScheduleRunOutcome>
 }
 
 /** One task's detail, as the Tasks page and the task tab both compose it. */
@@ -289,7 +314,7 @@ export function useTaskDetail(
  * @returns the detail region, its deletion confirmation dialog, and the linked Session entry.
  */
 export function TaskDetail({
-  task, authoritative, id, status, deleting, onDelete, onRetry, onUpdateTiming, loadHistory, onOpenSession,
+  task, authoritative, id, status, deleting, onDelete, onRetry, onUpdateTiming, loadHistory, onOpenSession, onRun,
   onEditState, tab, onTabChange, confirmId, onConfirm, onDeleted, onClose, withinSession, useSessions, useWorkspaces, t,
 }: TaskDetailProps): ReactNode {
   const sessions = useSessions(snapshot => snapshot)
@@ -374,6 +399,9 @@ export function TaskDetail({
   }, [edit.shown.kind, edit.shown.draft.seconds])
   const [pending, setPending] = useState(false)
   const [failure, setFailure] = useState<TaskManagerKey>()
+  const [runPending, setRunPending] = useState(false)
+  // One settled run notice: a refusal is announced, a delivered run is only reported.
+  const [runOutcome, setRunOutcome] = useState<{ readonly key: TaskManagerKey; readonly failed: boolean }>()
   // A locally refused save re-reads the draft on every render, so its message
   // leaves the hint slot as soon as edits remove the cause and the descriptive
   // hint returns; Host failures stay until the next cancel or save.
@@ -468,6 +496,8 @@ export function TaskDetail({
     setPending(false)
     setFailure(undefined)
     setDeletionConfirmed(false)
+    setRunPending(false)
+    setRunOutcome(undefined)
   } else if (edit.propKey !== propKey) {
     // A memory that only mirrors the record's own day set is a seed rather than a
     // choice, so any refresh that finds the two equal retires it — a renamed
@@ -508,6 +538,14 @@ export function TaskDetail({
   }, [deleted, onDeleted])
   // One pair for the next-run line: both halves come from this one call.
   const nextRun = nextRunParts(task.scheduledAt, t('time.locale'), now, t)
+  // A run sends the stored rule, so an unsaved draft, a save in flight, an ended
+  // task, and a catalog row the last read no longer holds all withhold it.
+  const runBlocked = busy || pending || !authoritative || task.status === 'inactive' || runPending || dirty
+  const runHint = runPending
+    ? t('run.pending')
+    : task.status === 'inactive'
+      ? t('run.blocked.ended')
+      : dirty ? t('run.blocked.dirty') : t('run.hint')
 
   // The day set one task's card last had in hand, kept across a detour through a
   // kind that shows no weekday row: switching Monday-to-Friday to Daily and then
@@ -691,6 +729,31 @@ export function TaskDetail({
     void onDelete(task.id)
   }
 
+  /**
+   * Deliver the stored instruction once, then report the settled outcome here.
+   *
+   * The run leaves the rule's target and status untouched, so this detail states
+   * the outcome in place instead of waiting for the catalog to show a change.
+   * @returns Resolution after the notice takes the outcome of this run.
+   */
+  const runNow = async (): Promise<void> => {
+    const submitted = taskIdentity
+    setRunPending(true)
+    setRunOutcome(undefined)
+    let outcome: ScheduleRunOutcome
+    try {
+      outcome = await onRun(task.id, task.sessionId)
+    } catch {
+      // The call itself failed, so whether the reminder reached the Session is unknown.
+      outcome = { ran: false, code: 'unknown' }
+    }
+    if (!mounted.current || identityRef.current !== submitted) return
+    setRunPending(false)
+    setRunOutcome(outcome.ran
+      ? { key: 'run.done', failed: false }
+      : { key: RUN_FAILURE_KEYS[outcome.code], failed: true })
+  }
+
   return <>
     <aside ref={panelRef} className={css.detail} id={id} tabIndex={-1} aria-label={t('detail.label')}>
       <div className={css.detailTabsBar}>
@@ -823,7 +886,30 @@ export function TaskDetail({
               value={shown.title}
               onChange={(event) => { editContent({ title: event.target.value }) }}
             />}
+          {/* The run control sits on the heading it runs, and delivers the stored
+              rule: a draft that differs from it withholds the action. */}
+          <Tooltip label={runHint} side="bottom" portal>
+            <span className={css.runAction}>
+              <Button
+                size="sm"
+                className={css.detailIconButton}
+                aria-label={t('detail.run')}
+                aria-busy={runPending}
+                disabled={runBlocked}
+                onClick={() => { void runNow() }}
+              >
+                <IconPlayOutlineRegular />
+              </Button>
+            </span>
+          </Tooltip>
         </header>}
+        {/* A run leaves the rule's target and status untouched, so its own outcome
+            is what tells the reader the instruction was delivered. It sits above
+            the next-run line the success notice says stays as planned. */}
+        {tab === 'rule' && !deleted && runOutcome !== undefined && <p
+          className={runOutcome.failed ? clsx(css.runNotice, css.runNoticeError) : css.runNotice}
+          role={runOutcome.failed ? 'alert' : 'status'}
+        >{t(runOutcome.key)}</p>}
         {tab === 'rule' && !deleted && <div className={css.nextRun}>
           {task.status === 'active'
             ? <p>

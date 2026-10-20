@@ -65,6 +65,12 @@ const cron: ScheduleCatalogEntry = {
   scheduledAt: '2026-10-05T01:30:00.000Z',
 }
 
+/** An ended task: its detail still opens, and it offers no immediate run. */
+const endedTask: ScheduleCatalogEntry = {
+  id: 'task-ended' as ScheduleId, sessionId: at.sessionId, kind: 'at', status: 'inactive',
+  title: 'Ended run', prompt: 'Ended run', scheduledAt: '2026-10-01T09:00:00.000Z',
+}
+
 /** The same `every` task after another client switched its kind to Every day. */
 const movedToDaily: ScheduleCatalogEntry = {
   id: every.id, sessionId: every.sessionId, kind: 'daily', status: 'active',
@@ -126,6 +132,7 @@ function mount(
       ok: true, value: { id: expected.id, updated: false, record: expected },
     })),
     onOpenSession: vi.fn(),
+    onRun: vi.fn<TaskManagerPageProps['onRun']>(async () => ({ ran: true })),
     loadHistory: vi.fn<TaskManagerPageProps['loadHistory']>(async ({ id }) => ({
       ok: true, value: {
         id, records: [], earlierRecordsUnavailable: false,
@@ -136,6 +143,7 @@ function mount(
   }
   const view = render(<TaskManagerPage {...props} />)
   return {
+    props,
     updateTiming: vi.mocked(props.onUpdateTiming),
     /** Publish an authoritative catalog snapshot, as a Host refresh does. */
     update(next: readonly ScheduleCatalogEntry[]) {
@@ -153,6 +161,11 @@ function mount(
 /** Select one listed task, opening its detail. */
 function selectTask(name: string): void {
   fireEvent.click(screen.getByRole('button', { name }))
+}
+
+/** The immediate-run control on the shown task's heading. */
+function runButton(): HTMLButtonElement {
+  return within(screen.getByRole('complementary')).getByRole<HTMLButtonElement>('button', { name: en['detail.run'] })
 }
 
 /** The Repeat selector of the shown rule's Run time card. */
@@ -998,5 +1011,59 @@ describe('TaskDetail cron rows', () => {
     chooseCronShape('cronForm.weekly')
     expect(screen.queryByLabelText(en['rule.cronLabel'])).toBeNull()
     expect(screen.queryByRole('button', { name: en['rule.save'] })).toBeNull()
+  })
+})
+
+describe('TaskDetail immediate run', () => {
+  it('runs the stored rule from the heading and announces the unchanged plan', async () => {
+    const h = mount([every])
+    selectTask('Check metrics')
+
+    await act(async () => { fireEvent.click(runButton()) })
+
+    const detail = within(screen.getByRole('complementary'))
+    expect(vi.mocked(h.props.onRun)).toHaveBeenCalledExactlyOnceWith(every.id, every.sessionId)
+    // The run consumes nothing, so this detail states its own outcome: the plan
+    // stays armed and the next-run line needs no reread.
+    expect(detail.getByRole('status').textContent).toBe(en['run.done'])
+    expect(runButton().disabled).toBe(false)
+  })
+
+  it('withholds the run while a draft differs from the stored rule', () => {
+    mount([every])
+    selectTask('Check metrics')
+    expect(runButton().disabled).toBe(false)
+
+    // A run sends the stored instruction, so an unsaved draft withholds it.
+    fireEvent.change(screen.getByLabelText(en['detail.name']), { target: { value: 'Check metrics now' } })
+    expect(runButton().disabled).toBe(true)
+  })
+
+  it('withholds the run for an ended task', () => {
+    mount([endedTask])
+    selectTask('Ended run')
+    expect(runButton().disabled).toBe(true)
+  })
+
+  it('states the refusal a run settles with instead of delivering', async () => {
+    const h = mount([every])
+    selectTask('Check metrics')
+    vi.mocked(h.props.onRun).mockResolvedValueOnce({ ran: false, code: 'session' })
+
+    await act(async () => { fireEvent.click(runButton()) })
+
+    const detail = within(screen.getByRole('complementary'))
+    expect(detail.getByRole('alert').textContent).toBe(en['run.error.session'])
+    expect(runButton().disabled).toBe(false)
+  })
+
+  it('reports an unconfirmed outcome when the call itself fails', async () => {
+    const h = mount([every])
+    selectTask('Check metrics')
+    vi.mocked(h.props.onRun).mockRejectedValueOnce(new Error('run response disconnected'))
+
+    await act(async () => { fireEvent.click(runButton()) })
+
+    expect(within(screen.getByRole('complementary')).getByRole('alert').textContent).toBe(en['run.error.unknown'])
   })
 })

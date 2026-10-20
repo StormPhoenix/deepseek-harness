@@ -23,6 +23,9 @@ const deliveryReceiptSchema = z.object({
   scheduledAt: instantSchema,
   deliveredAt: instantSchema,
   messageId: z.string().min(1).refine(value => value.trim() === value).transform(MessageId),
+  // Absent means rule-driven delivery, so records written before manual runs
+  // existed stay valid without a migration; the domain version therefore stays 1.
+  manual: z.literal(true).optional(),
 }).strict()
 
 const deliveryHistorySchema = z.object({
@@ -48,6 +51,7 @@ export const scheduleTaskSchema = z.object({
     && latest.scheduledAt === task.lastDelivery.scheduledAt
     && latest.deliveredAt === task.lastDelivery.deliveredAt
     && latest.messageId === task.lastDelivery.messageId
+    && latest.manual === task.lastDelivery.manual
 }, { message: 'Last delivery must match the latest saved delivery receipt' })
 
 /** Persistent task value; absent history retains only its legacy last receipt without a read-time rewrite. */

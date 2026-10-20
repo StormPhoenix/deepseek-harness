@@ -41,7 +41,9 @@ import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-client-connection/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import type { ScheduleCatalogEntry, ScheduleDeliveryHistoryRequest, ScheduleId, ScheduleUpdateRequest } from '@deepseek-ai/dsh-schedule/client'
+import type {
+  ScheduleCatalogEntry, ScheduleDeliveryHistoryRequest, ScheduleId, ScheduleRunResult, ScheduleUpdateRequest,
+} from '@deepseek-ai/dsh-schedule/client'
 import { createCatalogSource, type CatalogDeleteOutcome, type CatalogInjected } from './catalog-source.ts'
 import { createDeleteToastSource, ScheduleDeleteToast } from './DeleteToast.tsx'
 import { SCHEDULE_TASK_ID, SCHEDULE_TASK_KIND, scheduleTaskDefinition } from './definition.ts'
@@ -55,7 +57,7 @@ import { SessionScheduleMark } from './SessionScheduleMark.tsx'
 import { createSessionScheduleSource, type SessionScheduleSourceFactory } from './session-schedule-state.ts'
 import { TaskTabBindings } from './task-tab-bindings.ts'
 import { TaskManagerPage, type TaskManagerInjected } from './TaskManagerPage.tsx'
-import type { TaskDetailInjected } from './TaskDetail.tsx'
+import type { ScheduleRunFailure, ScheduleRunOutcome, TaskDetailInjected } from './TaskDetail.tsx'
 import { TaskManagerIcon } from './TaskManagerIcon.tsx'
 import { sessionLinkState } from './session-link.ts'
 import { en, NS, zh, type ScheduleCatalogKey } from './locales.ts'
@@ -63,6 +65,16 @@ import { en as managerEn, zh as managerZh, type TaskManagerKey } from './task-ma
 
 const MANAGER_NS = 'schedule.manager'
 const PANEL_ID = 'schedules' as MainPanelId
+
+/** Stable refusal codes one immediate run can report. */
+type RunRefusalCode = Extract<ScheduleRunResult, { readonly ran: false }>['code']
+
+/** Copy-free mapping from the Host's refusal codes to this detail's outcomes. */
+const RUN_REFUSALS: Record<RunRefusalCode, ScheduleRunFailure> = {
+  schedule_not_found: 'notFound',
+  schedule_ended: 'ended',
+  session_unavailable: 'session',
+}
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -132,6 +144,28 @@ export function apply(ctx: ClientContext): void {
     return result
   }
   const loadHistory = (request: ScheduleDeliveryHistoryRequest) => ctx.remote.schedule.history(request)
+  /**
+   * Deliver one task's stored instruction once, through its original Session binding.
+   *
+   * The run changes no rule, so nothing else is re-read here: the Host's changed
+   * notification reports the saved manual receipt to every open catalog on its own.
+   * @param id - Task whose stored instruction runs now.
+   * @param sessionId - That task's original Session binding.
+   * @returns Whether the reminder reached its Session, or the stable refusal.
+   */
+  const runTask = async (id: ScheduleId, sessionId: SessionId): Promise<ScheduleRunOutcome> => {
+    try {
+      const result = await ctx.remote.schedule.run({ sessionId, id })
+      if (!result.ok) return { ran: false, code: 'unknown' }
+      const value = result.value
+      // The only member without `ran` is the subagent refusal, which states its own code.
+      if (!('ran' in value)) return { ran: false, code: 'subagent' }
+      return value.ran ? { ran: true } : { ran: false, code: RUN_REFUSALS[value.code] }
+    } catch {
+      // A transport failure leaves the delivery unknown, and the detail says so.
+      return { ran: false, code: 'unknown' }
+    }
+  }
   const openSession = (id: SessionId): void => {
     if (sessionLinkState(id, ctx.sessions.list.getSnapshot(), ctx.workspaces.list.getSnapshot()) === 'available') {
       ctx.uiWorkspace.openSession(id)
@@ -144,6 +178,7 @@ export function apply(ctx: ClientContext): void {
     onUpdateTiming: updateTask,
     loadHistory,
     onOpenSession: openSession,
+    onRun: runTask,
   }
   // The Sidebar persists a tab's layout record and not its navigation
   // parameters, so this page type keeps the task it last showed per Session and

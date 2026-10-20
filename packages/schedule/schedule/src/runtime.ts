@@ -1,6 +1,8 @@
 /** Host timer over stored tasks; Session activation is a delivery operation. */
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { MessageId } from '@deepseek-ai/dsh-llm/brand'
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
     'schedule': { kind: 'schedule' } & ContextFormed
@@ -15,6 +17,26 @@ import { appendDelivery } from './delivery-history.ts'
 
 /** Largest delay Node timers represent without clamping. */
 export const MAX_TIMER_DELAY_MS = 2_147_483_647
+
+/** One immediate delivery's acknowledgment, or the Session that could not be resolved. */
+export type ImmediateDelivery =
+  | { readonly delivered: true; readonly messageId: MessageId; readonly deliveredAt: string }
+  | { readonly delivered: false; readonly reason: 'session_unavailable' }
+
+/**
+ * Render the model-facing framing of one manually run task.
+ *
+ * A manual run consumes no occurrence, so a recurring rule states the committed
+ * target it ran under rather than one newly resolved from the clock: the model
+ * reads exactly the framing a scheduled delivery of that target would carry.
+ * @param task - Active stored task the caller selected.
+ * @returns The batch framing recurring rules receive, or the one-shot framing.
+ */
+function manualReminderText(task: ScheduleTask): string {
+  return isRecurringScheduleRecord(task.record)
+    ? renderRecurringReminderBatchFraming([{ record: task.record, occurrenceAt: task.record.scheduledAt }])
+    : renderReminderFraming(task.record)
+}
 
 /** Owns at most one timer across recomputations; delivery and management share the serialized operation. */
 export class ScheduleRuntime {
@@ -77,6 +99,41 @@ export class ScheduleRuntime {
     await this.running?.catch(() => undefined)
   }
 
+  /**
+   * Deliver one task's stored instruction now without advancing or retiring its rule.
+   *
+   * The message is framed and enqueued exactly as a scheduled delivery is, so the
+   * Session reacts identically; only the caller's bookkeeping differs, because a
+   * manual run is not an occurrence of the rule.
+   * @param task - Active stored task the caller selected.
+   * @returns The acknowledgment, or the stable reason nothing was delivered.
+   */
+  async deliverNow(task: ScheduleTask): Promise<ImmediateDelivery> {
+    return this.ctx.agents.withoutInitiator(async (): Promise<ImmediateDelivery> => {
+      const resolved = await this.ctx.sessionController.resolveAgent(task.sessionId)
+      if ('error' in resolved) return { delivered: false, reason: 'session_unavailable' }
+      const { messageId, deliveredAt } = await this.deliver(resolved.agent, manualReminderText(task))
+      return { delivered: true, messageId, deliveredAt }
+    })
+  }
+
+  /**
+   * Append one reminder to a resolved Session's inbox and wait for persistence to accept it.
+   * @param agent - Live Agent for the task's original Session.
+   * @param text - Model-facing reminder framing.
+   * @returns The message identity and the acknowledgment time.
+   */
+  private async deliver(agent: Agent, text: string): Promise<{ messageId: MessageId; deliveredAt: string }> {
+    const message = createUserMessage({
+      content: [{ type: 'text', text }], source: { kind: 'schedule' },
+    })
+    // followup synchronously appends the inbox splice before flush observes the Session.
+    agent.followup(message)
+    const flushed = await this.ctx.sessions.flush(agent.session)
+    if (!flushed) throw new Error('Session persistence did not acknowledge the reminder')
+    return { messageId: message.id, deliveredAt: new Date(Date.now()).toISOString() }
+  }
+
   private clearTimer(): void {
     if (this.timer !== undefined) clearTimeout(this.timer)
     this.timer = undefined
@@ -116,18 +173,11 @@ export class ScheduleRuntime {
             record: member.record, occurrenceAt: occurrence.occurrenceAt,
           })))
           : renderReminderFraming(task.record)
-        const message = createUserMessage({
-          content: [{ type: 'text', text }], source: { kind: 'schedule' },
-        })
-        // followup synchronously appends the inbox splice before flush observes the Session.
-        resolved.agent.followup(message)
-        const flushed = await this.ctx.sessions.flush(resolved.agent.session)
-        if (!flushed) throw new Error('Session persistence did not acknowledge the reminder')
-        const deliveredAt = new Date(Date.now()).toISOString()
+        const { messageId, deliveredAt } = await this.deliver(resolved.agent, text)
         if (!isRecurringScheduleRecord(task.record)) {
           await this.commit({
             ...task, status: 'inactive',
-            ...appendDelivery(task, { scheduledAt: task.record.scheduledAt, deliveredAt, messageId: message.id }, this.retention),
+            ...appendDelivery(task, { scheduledAt: task.record.scheduledAt, deliveredAt, messageId }, this.retention),
           })
           committed.add(task.record.id)
         }
@@ -136,7 +186,7 @@ export class ScheduleRuntime {
             ...member,
             record: { ...member.record, scheduledAt: occurrence.nextScheduledAt ?? occurrence.occurrenceAt },
             status: occurrence.nextScheduledAt === undefined ? 'inactive' : 'active',
-            ...appendDelivery(member, { scheduledAt: occurrence.occurrenceAt, deliveredAt, messageId: message.id }, this.retention),
+            ...appendDelivery(member, { scheduledAt: occurrence.occurrenceAt, deliveredAt, messageId }, this.retention),
           })
           committed.add(member.record.id)
         }

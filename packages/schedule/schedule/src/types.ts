@@ -195,12 +195,18 @@ export type ScheduleRecord = OneShotScheduleRecord | RecurringScheduleRecord
 
 /** Durable Session inbox delivery acknowledgment, not model execution completion. */
 export interface ScheduleDeliveryReceipt {
-  /** Canonical UTC target of the delivered occurrence. */
+  /** Canonical UTC target of the delivered occurrence, or the plan a manual run delivered under. */
   readonly scheduledAt: string
   /** Canonical UTC time sampled after Session persistence acknowledged delivery. */
   readonly deliveredAt: string
   /** Identity of the delivered message, shared by tasks in one recurring batch. */
   readonly messageId: MessageId
+  /**
+   * Person-triggered run of the stored instruction; absent means the rule's own
+   * schedule delivered it. A manual run never advances or retires the rule, so
+   * the receipt's `scheduledAt` still names the plan that remains armed.
+   */
+  readonly manual?: true
 }
 
 /** Saved inbox delivery with its immutable sent prompt when recorded by this Host. */
@@ -398,6 +404,12 @@ export interface ScheduleDeleteRequest extends ScheduleListRequest {
   id: ScheduleId
 }
 
+/** Immediate-run request within the original Session binding. */
+export interface ScheduleRunRequest extends ScheduleListRequest {
+  /** Task whose stored instruction is delivered now. */
+  readonly id: ScheduleId
+}
+
 /** Timing-only edit; it may select a different recurrence kind than the stored record, and one-shot targets use an absolute `at`. */
 export type ScheduleTimingChange =
   | { readonly kind: 'at'; readonly at: AtInput }
@@ -437,6 +449,15 @@ export type ScheduleUpdateResult =
 
 /** Canonical `schedule_update` value: the committed record as a view, or the non-mutating lookup/conflict result. */
 export type ScheduleUpdateValue = ScheduleView | ScheduleUpdateMiss | ScheduleToolError
+
+/**
+ * Non-mutating immediate-run outcome: the rule, its committed target, and its
+ * status are unchanged; the delivery itself is recorded as a manual receipt.
+ */
+export type ScheduleRunResult =
+  | { readonly id: ScheduleId; readonly ran: true; readonly deliveredAt: string }
+  | { readonly id: ScheduleId; readonly ran: false; readonly code: 'schedule_not_found' | 'schedule_ended' | 'session_unavailable' }
+  | SubagentSessionError
 
 /** Explicitly bounded saved-delivery query within one Session binding. */
 export interface ScheduleDeliveryHistoryRequest extends ScheduleDeleteRequest {

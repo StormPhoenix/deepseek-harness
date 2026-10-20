@@ -467,6 +467,29 @@
   margin-bottom: 4px;
 }
 
+/* The heading's run control: the 28px icon stays on the name's 32px step, so the
+   row states one figure whether the name is an editable control or plain text. */
+.runAction {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 32px;
+}
+
+/* A run's own outcome, under the heading at the muted step: the rule and its
+   target are unchanged, so this line is the whole result the reader sees. */
+.runNotice {
+  margin: 0 0 8px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.runNoticeError {
+  color: var(--dsw-alias-state-error-primary);
+}
+
 /* The mock's `.edit-name`: the stored task name as one borderless line that
    underlines only on hover and focus. The detail pane's primary text at 500 weight. */
 .editName {
@@ -1204,6 +1227,15 @@
   font-size: 14px;
   line-height: 22px;
   font-weight: 500;
+}
+
+/* The moment a manual run actually reached the Session, under the target it ran
+   under: the row keeps the plan's stamp and names its own delivery beside it. */
+.deliveryDeliveredAt {
+  margin: 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 20px;
 }
 
 .confirmTitle {
