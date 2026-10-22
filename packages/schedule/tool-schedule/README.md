@@ -38,6 +38,12 @@ Choose it for any preset whose agents need to schedule future work in their own 
 - `schedule_update(id, <title|prompt|one selector>)` — Replace the name, instruction, or timing in place, or a combination of them. An unknown or ended reminder returns `updated: false` with the reason code; `after_seconds` is create-only.
 - `schedule_delete(id)` — Remove one retained reminder, active or ended. Unknown or already-deleted ids return `deleted: false`.
 
+### Script tasks
+
+Mounted action providers add the optional `action` and `report` fields to creation and update. `action` contains `kind`, provider-specific `spec`, and optional positive `timeout_seconds`; commands use `spec: { command }`, programs use `spec: { source }`. The schemas refresh when providers register or unregister. A script task's required `prompt` describes how the model should handle its reported output; `report` selects every result, failures only, or saved execution records only.
+
+Creating or replacing code requires a `danger-full-access` Session or approval for that call. The tool captures the working directory and standing sandbox ceiling without applying the granted escalation to later runs. Code replacement retains the task's original directory and ceiling, and compares the observed source and timeout before writing. An in-flight task returns a conflict rather than changing its execution or report policy. Script views include source, directory, ceiling, availability, and report policy. Provider schema and execution constraints remain provider-owned.
+
 ### Minimal configuration
 
 ```yaml

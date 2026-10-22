@@ -17,6 +17,7 @@ import { appendDelivery } from '../../../packages/schedule/schedule/src/delivery
 import type { ScheduleTask } from '@deepseek-ai/dsh-schedule'
 import type { ContextFormed, GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import {
   ScheduleId,
   createEveryScheduleRecord,
@@ -1256,6 +1257,66 @@ describe.skipIf(MODE === 'record')('web e2e: active Schedule catalog', () => {
     } finally {
       await scaffold.ctx.schedule.delete({ sessionId: CATALOG_SESSION_ID, id: created.id })
       await page.clock.setFixedTime(new Date(CATALOG_NOW))
+    }
+  }, 60_000)
+
+  it.each(['command', 'program'] as const)('executes a tool-created %s task and exposes its saved result', async (kind) => {
+    const resolved = await scaffold.ctx.sessionController.resolveAgent(CATALOG_SESSION_ID)
+    if ('error' in resolved) throw resolved.error
+    const agent = resolved.agent
+    const previousMode = scaffold.ctx.sandboxPolicy.resolve({ session: agent.session }).mode
+    const source = kind === 'command' ? 'printf schedule-execution-evidence'
+      : 'console.log("schedule-execution-evidence"); return "saved-result"'
+    const spec = kind === 'command' ? { command: source } : { source }
+    const title = `Recorded ${kind} execution`
+    let createdId: ScheduleTask['record']['id'] | undefined
+    try {
+      setSandboxMode(agent.session, 'danger-full-access')
+      const result = await scaffold.ctx.tools.execute({
+        callId: ToolCallId(`schedule-${kind}-evidence-create`), agent, signal: AbortSignal.timeout(10_000), name: 'schedule_create',
+        arguments: { title, prompt: 'Explain failures', after_seconds: 3600, action: { kind, spec, timeout_seconds: 5 }, report: 'never' },
+      })
+      const created = (await scaffold.ctx.schedule.catalog()).find(task => task.sessionId === CATALOG_SESSION_ID && task.title === title)
+      if (created === undefined) throw new Error(`The model tool did not create a ${kind} task`)
+      createdId = created.id
+      expect(result.isError).toBe(false)
+      expect(created).toMatchObject({ action: { kind, source, cwd: scaffold.workspaceCwd }, report: 'never', status: 'active' })
+      setSandboxMode(agent.session, previousMode)
+      const started = await scaffold.ctx.schedule.run({ sessionId: CATALOG_SESSION_ID, id: created.id })
+      expect(started).toMatchObject({ id: created.id, ran: true })
+      await expect.poll(async () => {
+        const saved = await scaffold.ctx.schedule.runs({ sessionId: CATALOG_SESSION_ID, id: created.id, limit: 20 })
+        return 'records' in saved ? saved.records[0]?.outcome : undefined
+      }, { timeout: 15_000 }).toBe('succeeded')
+      const saved = await scaffold.ctx.schedule.runs({ sessionId: CATALOG_SESSION_ID, id: created.id, limit: 20 })
+      if (!('records' in saved)) throw new Error('Saved execution page is unavailable')
+      expect(saved.records).toHaveLength(1)
+      expect(saved.records[0]).toMatchObject({
+        manual: true, outputTruncated: false,
+        output: kind === 'command' ? 'schedule-execution-evidence' : 'schedule-execution-evidence\nsaved-result',
+      })
+      expect(saved.records[0]?.messageId).toBeUndefined()
+      expect((await scaffold.ctx.schedule.catalog()).find(task => task.id === created.id))
+        .toMatchObject({ scheduledAt: created.scheduledAt, status: 'active', lastRun: saved.records[0] })
+      const domain = scaffold.ctx.storageDomain.get('schedule')
+      const stored = domain?.table('tasks').get(created.id) as ScheduleTask | undefined
+      expect(stored?.runHistory?.records).toEqual(saved.records)
+      await page.getByRole('button', { name: 'Automation tasks', exact: true }).click()
+      const manager = page.getByTestId('task-manager-page')
+      await manager.getByRole('button', { name: 'All', exact: true }).click()
+      await manager.getByRole('searchbox', { name: 'Search tasks' }).fill(title)
+      await manager.getByRole('button', { name: title, exact: true }).click()
+      const detail = manager.getByRole('complementary', { name: 'Task details' })
+      await detail.getByText(source, { exact: true }).waitFor()
+      await detail.getByRole('tab', { name: 'Records', exact: true }).click()
+      await detail.getByText('Succeeded', { exact: true }).waitFor()
+      await detail.getByText('Captured output', { exact: true }).click()
+      expect(await detail.getByRole('list', { name: 'Execution records', exact: true }).locator('pre').textContent())
+        .toContain('schedule-execution-evidence')
+      expect(tripwire.pageErrors).toEqual([])
+    } finally {
+      setSandboxMode(agent.session, previousMode)
+      if (createdId !== undefined) await scaffold.ctx.schedule.delete({ sessionId: CATALOG_SESSION_ID, id: createdId })
     }
   }, 60_000)
 })

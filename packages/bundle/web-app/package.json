@@ -147,6 +147,8 @@
     "@deepseek-ai/dsh-plugin-manager": "workspace:*",
     "@deepseek-ai/dsh-plugin-market": "workspace:*",
     "@deepseek-ai/dsh-schedule": "workspace:*",
+    "@deepseek-ai/dsh-schedule-action-command": "workspace:*",
+    "@deepseek-ai/dsh-schedule-action-program": "workspace:*",
     "@deepseek-ai/dsh-session-log-export": "workspace:*",
     "@deepseek-ai/dsh-session-reference": "workspace:*",
     "@deepseek-ai/dsh-session-stats": "workspace:*",

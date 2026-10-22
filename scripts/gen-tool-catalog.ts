@@ -58,6 +58,9 @@ import * as ToolPty from '@deepseek-ai/dsh-tool-terminal'
 import * as ToolGoal from '@deepseek-ai/dsh-tool-goal'
 import * as ToolSchedule from '@deepseek-ai/dsh-tool-schedule'
 import type ScheduleService from '@deepseek-ai/dsh-schedule'
+import { ScheduleActionRegistry } from '@deepseek-ai/dsh-schedule'
+import * as ScheduleCommand from '@deepseek-ai/dsh-schedule-action-command'
+import * as ScheduleProgram from '@deepseek-ai/dsh-schedule-action-program'
 import Lsp from '@deepseek-ai/dsh-lsp'
 import * as ToolLsp from '@deepseek-ai/dsh-tool-lsp'
 import * as ToolSkill from '@deepseek-ai/dsh-tool-skill'
@@ -449,7 +452,13 @@ const TOOL_PACKAGES: ToolPackage[] = [
     async mount(ctx) {
       // Schema harvest never executes a tool, so the Host service is a
       // declaration-only stub.
-      ctx.provide('schedule', {} as ScheduleService)
+      ctx.provide('schedule', { actions: new ScheduleActionRegistry(() => {}) } as ScheduleService)
+      ctx.provide('shell', {} as never)
+      ctx.provide('ptcRuntime', {
+        language: 'typescript', programFormat: 'function-body', executionInstructions: 'Use an async TypeScript function body with await and return.',
+      } as never)
+      await ctx.plugin(ScheduleCommand)
+      await ctx.plugin(ScheduleProgram)
       await ctx.plugin(ToolSchedule)
     },
     note:
@@ -457,7 +466,10 @@ const TOOL_PACKAGES: ToolPackage[] = [
       + 'management tools. Each call acts on the calling Agent\'s Session. '
       + 'Accepts after_seconds, explicit absolute at, bounded fixed-rate every_seconds, daily and weekly '
       + 'local times in an explicit IANA zone, and cron as a five-field expression. '
-      + 'Management uses the Host storage domain; due messages resume the original Session.',
+      + 'Management uses the Host storage domain. Mounted command and program providers add optional action/report fields; '
+      + 'creating or replacing code requires danger-full-access or single-call approval, without widening future execution policy. '
+      + 'Prompt reminders resume the original Session; scripts run directly with optional result reporting. '
+      + 'This catalog shows both shipped action providers; absent providers remove their action schema branches.',
   },
   {
     pkg: '@deepseek-ai/dsh-tool-lsp',

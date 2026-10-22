@@ -190,6 +190,9 @@ function mount(
         earlierRecordsPruned: false, retention: { days: 30, records: 200 },
       } }
     }),
+    loadRuns: vi.fn<TaskManagerPageProps['loadRuns']>(async ({ id }) => ({
+      ok: true, value: { id, records: [], earlierRecordsPruned: false, retention: { days: 30, records: 200 } },
+    })),
     t: makeTranslate(dictionary),
     ...overrides,
   }

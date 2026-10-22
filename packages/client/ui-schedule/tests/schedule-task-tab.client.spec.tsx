@@ -110,6 +110,9 @@ function mount(
         earlierRecordsPruned: false, retention: { days: 30, records: 200 },
       },
     })),
+    loadRuns: vi.fn<ScheduleTaskTabProps['loadRuns']>(async ({ id }) => ({
+      ok: true, value: { id, records: [], earlierRecordsPruned: false, retention: { days: 30, records: 200 } },
+    })),
     onOpenSession: vi.fn(),
     taskBindings: new TaskTabBindings(() => [TAB.id]),
     t: makeTranslate(dictionary),

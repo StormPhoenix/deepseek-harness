@@ -647,9 +647,11 @@ const SERVICE_ROLES: ServiceRole[] = [
   {
     key: 'schedule',
     pkg: 'schedule',
-    title: 'Host scheduled messages',
+    title: 'Host scheduled tasks',
     mode: 'core',
-    note: 'Stores tasks independently of Session activation and queues due messages in the original Session.',
+    companions: ['schedule-action-command', 'schedule-action-program'],
+    consumers: ['tool-schedule', 'client-ui-schedule'],
+    note: 'Stores Session-bound tasks, registers action providers, and dispatches reminders or sandboxed scripts with saved execution results.',
   },
   {
     key: 'goals',

@@ -12,6 +12,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { delegationDepthOf } from '@deepseek-ai/dsh-subagent'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { GenericCallView } from '@deepseek-ai/dsh-tools'
+import { actionInput, actionParameters, approveScript, creationScript, modelView, reportInput } from './script-actions.ts'
 import {
   MAX_TITLE_LENGTH, MIN_EVERY_INTERVAL_SECONDS, REQUIRED_TITLE_MESSAGE, ScheduleId, ScheduleInputError, scheduleView,
 } from '@deepseek-ai/dsh-schedule'
@@ -35,6 +36,19 @@ const SHARED_VIEW_PROPERTIES = {
   scheduledAt: { type: 'string', required: true },
   state: { type: 'string', required: true, enum: ['scheduled', 'overdue'] },
   deliveryMode: { type: 'string', required: true, const: 'host' },
+  action: {
+    type: 'object', additionalProperties: false,
+    properties: {
+      kind: { type: 'string', required: true },
+      summary: { type: 'string', required: true },
+      source: { type: 'string', required: true },
+      timeoutMs: { type: 'integer' },
+      cwd: { type: 'string', required: true },
+      sandboxCeiling: { type: 'string', required: true, enum: ['read-only', 'workspace-write', 'danger-full-access'] },
+      available: { type: 'boolean', required: true },
+    },
+  },
+  report: { type: 'string', enum: ['always', 'on-failure', 'never'] },
 } as const
 
 const AFTER_VIEW_SCHEMA = {
@@ -127,6 +141,8 @@ const ERROR_SCHEMAS = [
   basicErrorSchema('time_out_of_range'),
   basicErrorSchema('frequency_too_high'),
   basicErrorSchema('subagent_session'),
+  basicErrorSchema('invalid_action'),
+  basicErrorSchema('action_unavailable'),
   basicErrorSchema('internal_error'),
 ] as const
 
@@ -172,7 +188,7 @@ const UPDATE_OUTPUT_SCHEMA = {
         code: {
           type: 'string',
           required: true,
-          enum: ['schedule_not_found', 'schedule_ended', 'schedule_conflict'],
+          enum: ['schedule_not_found', 'schedule_ended', 'schedule_conflict', 'not_script_task'],
         },
       },
     },
@@ -271,7 +287,9 @@ function validateCreateArgs(args: {
     && key !== 'every_seconds'
     && key !== 'daily'
     && key !== 'weekly'
-    && key !== 'cron')
+    && key !== 'cron'
+    && key !== 'action'
+    && key !== 'report')
     || Number(args.after_seconds !== undefined)
     + Number(args.at !== undefined)
     + Number(args.every_seconds !== undefined)
@@ -309,6 +327,8 @@ function validateUpdateArgs(args: {
   daily?: DailyInput
   weekly?: WeeklyInput
   cron?: CronInput
+  action?: unknown
+  report?: unknown
 }): ScheduleToolError | undefined {
   const selectors = [
     args.at !== undefined,
@@ -324,7 +344,9 @@ function validateUpdateArgs(args: {
     && key !== 'every_seconds'
     && key !== 'daily'
     && key !== 'weekly'
-    && key !== 'cron')
+    && key !== 'cron'
+    && key !== 'action'
+    && key !== 'report')
     || selectors > 1) {
     return {
       code: 'invalid_selector',
@@ -334,7 +356,7 @@ function validateUpdateArgs(args: {
   if (args.id.length === 0 || args.id.trim() !== args.id) {
     return { code: 'invalid_rule', message: 'schedule_update id must be non-empty without surrounding whitespace.' }
   }
-  if (selectors === 0 && args.title === undefined && args.prompt === undefined) {
+  if (selectors === 0 && args.title === undefined && args.prompt === undefined && args.action === undefined && args.report === undefined) {
     return {
       code: 'invalid_selector',
       message: 'schedule_update needs a new title, prompt, or one of at, every_seconds, daily, weekly, or cron.',
@@ -441,7 +463,16 @@ const SELECTOR_PARAMETERS = {
  * @param ctx - Context owning the `tools` registry and the Host `schedule` service.
  */
 export function apply(ctx: Context): void {
-  ctx.inject(['schedule'], (scheduleCtx) => { registerScheduleTools(scheduleCtx) })
+  ctx.inject(['schedule'], (scheduleCtx) => {
+    let unregister: (() => void)[] = []
+    const refresh = () => {
+      for (const dispose of unregister) dispose()
+      unregister = registerScheduleTools(scheduleCtx)
+    }
+    refresh()
+    scheduleCtx.on('schedule/actions-changed', refresh, { global: true })
+    scheduleCtx.effect(() => () => { for (const dispose of unregister) dispose() })
+  })
 }
 
 /**
@@ -449,10 +480,14 @@ export function apply(ctx: Context): void {
  * service.
  * @param ctx - Scope whose `schedule` service the tools act through.
  */
-function registerScheduleTools(ctx: Context): void {
-  ctx.tools.register(defineTool({
+function registerScheduleTools(ctx: Context): (() => void)[] {
+  const scripts = actionParameters(ctx)
+  const scriptDescription = scripts.action === undefined ? ''
+    : ' Optional actions execute saved code directly without calling a model. Creation or code replacement requires danger-full-access or approval for this call. Runs remain under the saved Session sandbox ceiling. Crashed runs are not repeated; report output is saved and may be sent to the model.'
+  const unregister: (() => void)[] = []
+  unregister.push(ctx.tools.register(defineTool({
     name: 'schedule_create',
-    description: CREATE_DESCRIPTION,
+    description: CREATE_DESCRIPTION + scriptDescription,
     parameters: {
       prompt: {
         type: 'string',
@@ -469,6 +504,7 @@ function registerScheduleTools(ctx: Context): void {
         description: 'Delay in whole seconds.',
       },
       ...SELECTOR_PARAMETERS,
+      ...scripts,
     },
     output: { schema: CREATE_OUTPUT_SCHEMA, render: renderValue },
     async execute(args, exec): Promise<ScheduleCreateValue> {
@@ -480,15 +516,20 @@ function registerScheduleTools(ctx: Context): void {
       if (invalid !== undefined) return invalid
       if (exec.signal.aborted) return internalError()
       try {
-        return scheduleView(await ctx.schedule.create(agent.session.id, args, exec.signal), Date.now())
+        const script = await creationScript(ctx, agent, exec, args)
+        const record = await ctx.schedule.create(agent.session.id, args, exec.signal, script)
+        if (script === undefined) return scheduleView(record, Date.now())
+        const entry = (await ctx.schedule.catalog()).find(candidate => candidate.id === record.id)
+        if (entry === undefined) return internalError()
+        return modelView(entry)
       } catch (error: unknown) {
         return operationError(error)
       }
     },
     presentCall: args => present('Create reminder', 'other', args.prompt),
-  }))
+  })))
 
-  ctx.tools.register(defineTool({
+  unregister.push(ctx.tools.register(defineTool({
     name: 'schedule_list',
     description: LIST_DESCRIPTION,
     parameters: {},
@@ -501,15 +542,20 @@ function registerScheduleTools(ctx: Context): void {
       if (exec.signal.aborted) return internalError()
       try {
         const records = await ctx.schedule.list({ sessionId: agent.session.id })
-        return records.map(record => scheduleView(record, Date.now()))
+        const entries = new Map((await ctx.schedule.catalog()).filter(entry => entry.sessionId === agent.session.id)
+          .map(entry => [entry.id, entry]))
+        return records.map((record) => {
+          const entry = entries.get(record.id)
+          return entry === undefined ? scheduleView(record, Date.now()) : modelView(entry)
+        })
       } catch (error: unknown) {
         return operationError(error)
       }
     },
     presentCall: () => present('List reminders', 'read'),
-  }))
+  })))
 
-  ctx.tools.register(defineTool({
+  unregister.push(ctx.tools.register(defineTool({
     name: 'schedule_delete',
     description: DELETE_DESCRIPTION,
     parameters: {
@@ -533,11 +579,11 @@ function registerScheduleTools(ctx: Context): void {
       }
     },
     presentCall: args => present('Delete reminder', 'other', args.id),
-  }))
+  })))
 
-  ctx.tools.register(defineTool({
+  unregister.push(ctx.tools.register(defineTool({
     name: 'schedule_update',
-    description: UPDATE_DESCRIPTION,
+    description: UPDATE_DESCRIPTION + scriptDescription,
     parameters: {
       id: { type: 'string', required: true, description: 'Schedule id returned by schedule_list.' },
       title: {
@@ -549,6 +595,7 @@ function registerScheduleTools(ctx: Context): void {
         description: 'New reminder content.',
       },
       ...SELECTOR_PARAMETERS,
+      ...scripts,
     },
     output: { schema: UPDATE_OUTPUT_SCHEMA, render: renderValue },
     async execute(args, exec): Promise<ScheduleUpdateValue> {
@@ -571,6 +618,19 @@ function registerScheduleTools(ctx: Context): void {
             .some(entry => entry.sessionId === sessionId && entry.id === id)
           return { id, updated: false, code: ended ? 'schedule_ended' : 'schedule_not_found' }
         }
+        const report = reportInput(args.report)
+        const action = args.action === undefined ? undefined : actionInput(ctx, args.action)
+        const entry = action === undefined && report === undefined ? undefined
+          : (await ctx.schedule.catalog()).find(candidate => candidate.id === id && candidate.sessionId === sessionId)
+        if ((action !== undefined || report !== undefined) && entry?.action === undefined) {
+          return { id, updated: false, code: 'not_script_task' }
+        }
+        if (action !== undefined && entry?.action !== undefined) {
+          await approveScript(ctx, agent, exec, action, args, {
+            cwd: entry.action.cwd, sandboxCeiling: entry.action.sandboxCeiling,
+          })
+        }
+        const previous = entry?.action
         const change = timingChangeFrom(args)
         const result = await ctx.schedule.update({
           sessionId,
@@ -579,12 +639,21 @@ function registerScheduleTools(ctx: Context): void {
           ...(change === undefined ? {} : { change }),
           ...(args.title === undefined ? {} : { title: args.title }),
           ...(args.prompt === undefined ? {} : { prompt: args.prompt }),
+          ...(action === undefined ? {} : { action }),
+          ...(report === undefined ? {} : { report }),
+          ...(previous === undefined ? {} : { expectedAction: {
+            kind: previous.kind, source: previous.source,
+            ...(previous.timeoutMs === undefined ? {} : { timeoutMs: previous.timeoutMs }),
+          } }),
         }, exec.signal)
-        return 'record' in result ? scheduleView(result.record, Date.now()) : result
+        if (!('record' in result)) return result
+        const current = (await ctx.schedule.catalog()).find(candidate => candidate.id === id && candidate.sessionId === sessionId)
+        return current === undefined ? scheduleView(result.record, Date.now()) : modelView(current)
       } catch (error: unknown) {
         return operationError(error)
       }
     },
     presentCall: args => present('Update reminder', 'other', args.id),
-  }))
+  })))
+  return unregister
 }

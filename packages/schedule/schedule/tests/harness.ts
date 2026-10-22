@@ -13,6 +13,19 @@ import { vi } from 'vitest'
 import type { Mock } from 'vitest'
 import { MemoryMediaPool, MemoryStorageBackend } from '../../../storage/storage-domain/tests/helpers/memory-backend.ts'
 import ScheduleService, { type Config } from '../src/index.ts'
+import { ScheduleActionRegistry } from '../src/actions.ts'
+import type { ScriptRunSupport } from '../src/runtime.ts'
+
+/**
+ * Script-run support with no mounted providers, for runtimes constructed directly.
+ * @returns An empty registry with the Host default limits.
+ */
+export function noScripts(): ScriptRunSupport {
+  return {
+    registry: new ScheduleActionRegistry(() => {}),
+    limits: { outputBytes: 16_384, defaultTimeoutMs: 120_000, maxTimeoutMs: 600_000 },
+  }
+}
 
 /**
  * Memory backend whose schedule-unit writes pass through per-primitive hooks.

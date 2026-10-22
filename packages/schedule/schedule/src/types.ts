@@ -6,6 +6,7 @@
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { MessageId } from '@deepseek-ai/dsh-llm/brand'
 import type { Branded } from '@deepseek-ai/dsh-brand'
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type {} from '@deepseek-ai/dsh-session/types'
 // Type-only: the Workspace registry's archive-admission family map this plugin merges `schedule` into.
 import type {} from '@deepseek-ai/dsh-workspace/types'
@@ -215,6 +216,69 @@ export interface ScheduleDeliveryRecord extends ScheduleDeliveryReceipt {
   readonly prompt?: string
 }
 
+/**
+ * When a script task's run result is delivered to its Session:
+ * `always` after every run, `on-failure` only after a run that did not succeed,
+ * `never` keeps the result in the task's run records only.
+ */
+export type ScheduleReportPolicy = 'always' | 'on-failure' | 'never'
+
+/** Browser-safe description of a task's script action; absent on a prompt reminder. */
+export interface ScheduleActionSummary {
+  /** Registered action provider kind, such as `command` or `program`. */
+  readonly kind: string
+  /** Provider-rendered one-line summary, or a bounded JSON rendering when the provider is not mounted. */
+  readonly summary: string
+  /** Complete stored source the action runs, rendered for read-only display. */
+  readonly source: string
+  /** Per-task elapsed budget in milliseconds; absent uses the Host default. */
+  readonly timeoutMs?: number
+  /** Absolute working directory captured at creation. */
+  readonly cwd: string
+  /** Widest sandbox mode a run may use; the Session's current mode narrows it further. */
+  readonly sandboxCeiling: 'read-only' | 'workspace-write' | 'danger-full-access'
+  /** Whether the Host currently mounts a provider for this kind. */
+  readonly available: boolean
+}
+
+/**
+ * Terminal classification of one script run.
+ *
+ * - `succeeded` / `failed` — the action ran and reported its own success or failure.
+ * - `timeout` — the elapsed budget expired.
+ * - `aborted` — deletion or Host shutdown cancelled the run.
+ * - `sandbox-denied` — the Session's sandbox refused a file effect or could not be established.
+ * - `skipped` — the previous run of the same task was still in flight.
+ * - `interrupted` — the Host stopped while the run was in flight; the run is never repeated.
+ * - `unavailable` — no provider for the kind is mounted, or the Session could not be resolved.
+ */
+export type ScheduleRunOutcome =
+  | 'succeeded' | 'failed' | 'timeout' | 'aborted' | 'sandbox-denied' | 'skipped' | 'interrupted' | 'unavailable'
+
+/** One saved script run; delivery to the Session is optional and recorded by message id. */
+export interface ScheduleRunRecord {
+  /** Globally unique run identity. */
+  readonly runId: string
+  /** Occurrence target the run served, or the armed target a manual run ran under. */
+  readonly scheduledAt: string
+  /** Canonical UTC time the run started (or was decided, for runs that never started). */
+  readonly startedAt: string
+  /** Canonical UTC time the outcome was recorded. */
+  readonly finishedAt: string
+  /** Person-triggered run; absent means the rule's own schedule started it. */
+  readonly manual?: true
+  /** Terminal classification. */
+  readonly outcome: ScheduleRunOutcome
+  /** Process exit code for actions that report one; null when a signal ended the process. */
+  readonly exitCode?: number | null
+  /** Captured output, cut to the Host's configured byte budget. */
+  readonly output: string
+  /** Whether bytes were dropped from `output`. */
+  readonly outputTruncated: boolean
+  /** Message that delivered this result to the Session, when the report policy delivered it. */
+  readonly messageId?: MessageId
+}
+
 /** Browser-safe retained reminder with its original Session binding. */
 export type ScheduleCatalogEntry = ScheduleRecord & {
   /** Session receiving this reminder when it becomes due. */
@@ -223,6 +287,14 @@ export type ScheduleCatalogEntry = ScheduleRecord & {
   readonly status: 'active' | 'inactive'
   /** Most recent durably acknowledged inbox delivery, when available. */
   readonly lastDelivery?: ScheduleDeliveryReceipt
+  /** Script action this task runs; absent on a prompt reminder. */
+  readonly action?: ScheduleActionSummary
+  /** Result delivery policy of a script task; absent on a prompt reminder. */
+  readonly report?: ScheduleReportPolicy
+  /** Present while a run of this script task is in flight. */
+  readonly running?: { readonly runId: string; readonly startedAt: string }
+  /** Most recent saved script run, when available. */
+  readonly lastRun?: ScheduleRunRecord
 }
 
 /** Creates one durable reminder record. */
@@ -273,6 +345,10 @@ export type ScheduleView = ScheduleRecord & {
   readonly state: ScheduleState
   /** Reminder delivery never leaves the owning session. */
   readonly deliveryMode: ScheduleDeliveryMode
+  /** Script action configuration when this task runs a program or command. */
+  readonly action?: ScheduleActionSummary
+  /** Script result report policy; absent on prompt reminders. */
+  readonly report?: ScheduleReportPolicy
 }
 
 /** Stable error returned for an empty, over-long, or untrimmed reminder prompt or title. */
@@ -323,6 +399,18 @@ export interface SubagentSessionError {
   readonly message: string
 }
 
+/** Stable error returned for a script action whose specification its provider rejects. */
+export interface InvalidActionError {
+  readonly code: 'invalid_action'
+  readonly message: string
+}
+
+/** Stable error returned when no provider for the requested action kind is mounted. */
+export interface ActionUnavailableError {
+  readonly code: 'action_unavailable'
+  readonly message: string
+}
+
 /** Stable fallback that does not disclose an internal exception. */
 export interface InternalScheduleError {
   readonly code: 'internal_error'
@@ -339,6 +427,8 @@ export type ScheduleToolError =
   | TimeOutOfRangeError
   | FrequencyTooHighError
   | SubagentSessionError
+  | InvalidActionError
+  | ActionUnavailableError
   | InternalScheduleError
 
 /** Canonical `schedule_create` value. */
@@ -392,6 +482,40 @@ export interface ScheduleCreateRequest {
   cron?: CronInput
 }
 
+/**
+ * Script action requested at creation or replacement. `spec` is untrusted
+ * provider input: the provider registered for `kind` validates and normalizes it.
+ */
+export interface ScheduleActionInput {
+  /** Registered action provider kind. */
+  readonly kind: string
+  /** Provider-specific specification, such as `{ command }` or `{ source }`. */
+  readonly spec: JsonValue
+  /** Per-task elapsed budget in milliseconds; capped by the Host's configured maximum. */
+  readonly timeoutMs?: number
+}
+
+/**
+ * Host-side context a script-task creation carries from its trusted caller.
+ * The tool consumer captures these from the calling Agent; they are never model input.
+ */
+export interface ScheduleActionBinding {
+  /** Absolute working directory every run of this task starts in. */
+  readonly cwd: string
+  /** Sandbox mode of the creating Session; runs never use a wider mode. */
+  readonly sandboxCeiling: 'read-only' | 'workspace-write' | 'danger-full-access'
+}
+
+/** Script-task part of a creation request; prompt-reminder creation omits it. */
+export interface ScheduleCreateActionRequest {
+  /** Action to run when due; `prompt` then frames the delivered run result for the model. */
+  readonly action: ScheduleActionInput
+  /** Result delivery policy; omitted delivers every result. */
+  readonly report?: ScheduleReportPolicy
+  /** Trusted creation context. */
+  readonly binding: ScheduleActionBinding
+}
+
 /** Session-scoped task list, without Agent activation. */
 export interface ScheduleListRequest {
   /** Original Session binding. */
@@ -432,13 +556,22 @@ export interface ScheduleUpdateRequest extends ScheduleDeleteRequest, ScheduleUp
   readonly expected: ScheduleRecord
   /** New timing; its kind may differ from the stored record's kind, and an omitted value keeps the committed target. */
   readonly change?: ScheduleTimingChange
+  /**
+   * Replacement action of a script task, compared against `expectedAction`.
+   * A prompt reminder cannot become a script task through an update.
+   */
+  readonly action?: ScheduleActionInput
+  /** Source and timeout observed when editing began; required with `action`. */
+  readonly expectedAction?: { readonly kind: string; readonly source: string; readonly timeoutMs?: number }
+  /** Replacement result delivery policy of a script task. */
+  readonly report?: ScheduleReportPolicy
 }
 
 /** Non-mutating compare-and-update outcome: unknown, inactive, or changed since the read. */
 export interface ScheduleUpdateMiss {
   readonly id: ScheduleId
   readonly updated: false
-  readonly code: 'schedule_not_found' | 'schedule_ended' | 'schedule_conflict'
+  readonly code: 'schedule_not_found' | 'schedule_ended' | 'schedule_conflict' | 'not_script_task'
 }
 
 /** Successful current record, non-mutating lookup/conflict failure, or invalid name/instruction/timing. */
@@ -452,12 +585,40 @@ export type ScheduleUpdateValue = ScheduleView | ScheduleUpdateMiss | ScheduleTo
 
 /**
  * Non-mutating immediate-run outcome: the rule, its committed target, and its
- * status are unchanged; the delivery itself is recorded as a manual receipt.
+ * status are unchanged. A prompt reminder reports its saved manual receipt; a
+ * script task reports the started run, whose result arrives as a run record.
  */
 export type ScheduleRunResult =
   | { readonly id: ScheduleId; readonly ran: true; readonly deliveredAt: string }
-  | { readonly id: ScheduleId; readonly ran: false; readonly code: 'schedule_not_found' | 'schedule_ended' | 'session_unavailable' }
+  | { readonly id: ScheduleId; readonly ran: true; readonly runId: string; readonly startedAt: string }
+  | {
+    readonly id: ScheduleId
+    readonly ran: false
+    readonly code: 'schedule_not_found' | 'schedule_ended' | 'session_unavailable' | 'schedule_running'
+  }
   | SubagentSessionError
+
+/** Explicitly bounded saved-run query within one Session binding. */
+export interface ScheduleRunHistoryRequest extends ScheduleDeleteRequest {
+  /** Required safe-integer page size from 1 through 100. */
+  limit: number
+  /** Run identity of the oldest entry in the previous page; excluded from this page. */
+  before?: string
+}
+
+/** Newest-first saved script runs, or a non-mutating task/cursor lookup failure. */
+export type ScheduleRunHistoryResult =
+  | {
+    readonly id: ScheduleId
+    readonly records: ScheduleRunRecord[]
+    /** True only after an append removed saved records. */
+    readonly earlierRecordsPruned: boolean
+    /** Current Host retention configuration, shared with delivery history. */
+    readonly retention: DeliveryRetentionBounds
+    /** Oldest returned run identity, present only when older saved records remain. */
+    readonly nextBefore?: string
+  }
+  | { readonly id: ScheduleId; readonly code: 'schedule_not_found' | 'run_cursor_not_found' }
 
 /** Explicitly bounded saved-delivery query within one Session binding. */
 export interface ScheduleDeliveryHistoryRequest extends ScheduleDeleteRequest {
@@ -497,5 +658,9 @@ declare module '@deepseek-ai/cordis' {
      * @mode emit
      */
     'schedule/changed'(): void
+    /** The set of mounted script-action providers changed; tool consumers refresh their action schema.
+     * @mode emit
+     */
+    'schedule/actions-changed'(): void
   }
 }

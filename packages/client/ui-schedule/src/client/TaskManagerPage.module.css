@@ -548,6 +548,44 @@
   overflow-wrap: anywhere;
 }
 
+.scriptAction {
+  padding: 16px;
+  margin-bottom: 16px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 12px;
+  overflow-wrap: anywhere;
+}
+
+.scriptSource {
+  max-height: 320px;
+  padding: 12px;
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-module-platform);
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.scriptRuns {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.scriptRun {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--dsw-alias-border-l3);
+}
+
+.scriptRunHeader {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 /* The countdown beside the absolute next run reads in the same color as the
    stamp it follows, one sentence in one step. */
 .nextRunRelative {

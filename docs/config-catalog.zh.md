@@ -2705,7 +2705,7 @@ export interface Config {
 ## `@deepseek-ai/dsh-schedule`
 
 - `inject`: `agents` · `sessions` · `storageDomain` · `sessionController` · `sessionPersistence`
-- `source`: [`packages/schedule/schedule/src/index.ts:72`](../packages/schedule/schedule/src/index.ts)
+- `source`: [`packages/schedule/schedule/src/index.ts:82`](../packages/schedule/schedule/src/index.ts)
 
 ```ts config-catalog
 /** Configuration for the Host Schedule domain. */
@@ -2720,6 +2720,12 @@ export interface Config {
    * cap and the window wins, and the newest records survive.
    */
   deliveryHistoryRecords?: number
+  /** Byte budget of each script run's saved and delivered output; omission defaults to 16384. */
+  runOutputBytes?: number
+  /** Elapsed budget of a script task that states none, in milliseconds; omission defaults to 120000. */
+  actionTimeoutMs?: number
+  /** Cap of any script task's elapsed budget, in milliseconds; omission defaults to 600000. */
+  maxActionTimeoutMs?: number
 }
 ```
 <!-- END GENERATED config-catalog:@deepseek-ai/dsh-schedule -->
@@ -4680,6 +4686,8 @@ export interface Config {
 | `@deepseek-ai/dsh-mcp-resources` | `tools` | [`packages/mcp/mcp-resources/src/index.ts`](../packages/mcp/mcp-resources/src/index.ts) |
 | `@deepseek-ai/dsh-otel` | — | [`packages/telemetry/otel/src/index.ts`](../packages/telemetry/otel/src/index.ts) |
 | `@deepseek-ai/dsh-sandbox-ssh` | `ssh` | [`packages/ssh/sandbox-ssh/src/index.ts`](../packages/ssh/sandbox-ssh/src/index.ts) |
+| `@deepseek-ai/dsh-schedule-action-command` | `schedule` · `shell` | [`packages/schedule/schedule-action-command/src/index.ts`](../packages/schedule/schedule-action-command/src/index.ts) |
+| `@deepseek-ai/dsh-schedule-action-program` | `schedule` · `ptcRuntime` | [`packages/schedule/schedule-action-program/src/index.ts`](../packages/schedule/schedule-action-program/src/index.ts) |
 | `@deepseek-ai/dsh-session` | — | [`packages/core/session/src/index.ts`](../packages/core/session/src/index.ts) |
 | `@deepseek-ai/dsh-session-checkpoint-policy` | `llm` · `sessionPersistence` · `sessions` · `tools` | [`packages/session/session-checkpoint-policy/src/index.ts`](../packages/session/session-checkpoint-policy/src/index.ts) |
 | `@deepseek-ai/dsh-session-projection` | — | [`packages/session/session-projection/src/index.ts`](../packages/session/session-projection/src/index.ts) |

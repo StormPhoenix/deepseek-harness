@@ -37,7 +37,7 @@
 | `@deepseek-ai/dsh-tool-fs-search` | `glob`、`grep` | `ctx.workingDirectory`、`ctx.tools`、`ctx.subprocess`、`ctx.systemPrompt` | `tool/call`、`tool/result` | - | glob 和 grep 是无条件可用的发现工具，通过 ctx.subprocess spawn 随包提供的 ripgrep 二进制文件（`@vscode/ripgrep`），并作为普通前台调用运行，绝不作为后台任务；无需在宿主机安装 `rg`，也不经过 shell 层。本目录使用 `sampleOverCapGlobResults: true`；部署必须显式选择该行为。结果超过上限时，会通过可选的 ctx.spillStore 后端保存完整的格式化列表；在共置部署中，如果后端公开本地路径，返回的定位信息可供后续读取／搜索。 |
 | `@deepseek-ai/dsh-tool-terminal` | `terminal_close`、`terminal_list`、`terminal_open`、`terminal_read`、`terminal_send`、`terminal_signal` | `ctx.workingDirectory`、`ctx.tools`、`ctx.terminals`、`ctx.systemPrompt`、`ctx.jobs at call time for run_in_background` | `tool/call`、`tool/result` | - | 这 6 个终端工具需要选择启用，用于补充一次性 bash／文件系统工具。`terminal_send(run_in_background: true)` 会注册到 `ctx.jobs`；schema 不包含 TUI、具名按键序列、BEL、调整尺寸、自动启动和跨 agent 共享。 |
 | `@deepseek-ai/dsh-tool-goal` | `create_goal`、`get_goal`、`update_goal` | `ctx.tools`、`ctx.agents`、`ctx.goals`、`ctx.systemPrompt`、`a calling Agent in an authorized open turn` | `tool/call`、`goal/change for mutations`、`tool/result` | - | create、edit、pause 和 resume 要求直接来自人类的根权限；complete 和 blocked 也接受确切的当前 Goal Round。blocked 的默认下限是 3 个获准的 Round。 |
-| `@deepseek-ai/dsh-tool-schedule` | `schedule_create`、`schedule_delete`、`schedule_list`、`schedule_update` | `ctx.tools`、`ctx.schedule` | `tool/call`、Schedule storage domain 创建、更新或删除、`tool/result` | - | preset 或 Agent scope 挂载本包；由 preset 决定哪些 agent 获得这四个管理工具。每次调用都作用于调用方 Agent 的 Session。接受 after_seconds、显式绝对 at、有界固定速率 every_seconds、带显式 IANA 时区的每日与每周本地时间，以及作为五字段表达式的 cron。管理使用宿主 storage domain；到期消息会恢复原 Session。 |
+| `@deepseek-ai/dsh-tool-schedule` | `schedule_create`、`schedule_delete`、`schedule_list`、`schedule_update` | `ctx.tools`、`ctx.schedule` | `tool/call`、Schedule storage domain 创建、更新或删除、`tool/result` | - | preset 或 Agent scope 挂载本包；由 preset 决定哪些 agent 获得这四个管理工具。每次调用都作用于调用方 Agent 的 Session。接受 after_seconds、显式绝对 at、有界固定速率 every_seconds、带显式 IANA 时区的每日与每周本地时间，以及作为五字段表达式的 cron。管理使用宿主 storage domain。已挂载的 command 和 program 提供方增加可选 action/report 字段；创建或替换代码要求 danger-full-access 或单次审批，不放宽未来执行策略。提醒恢复原 Session；脚本直接执行，并可选择回报结果。本目录展示两种随附动作提供方；没有挂载的提供方不会贡献其动作 schema 分支。 |
 | `@deepseek-ai/dsh-tool-lsp` | `lsp` | `ctx.workingDirectory`、`ctx.tools`、`ctx.lsp`、`ctx.systemPrompt` | `tool/call`、`tool/result` | - | lsp 工具将提供方选择和语言服务器子进程置于 ctx.lsp 之后，因此其模型可见 schema 在更换提供方时保持稳定。运行时要求已注册提供方，例如 `@deepseek-ai/dsh-lsp-stdio`；如果没有提供方，查询会返回结构化 `LSP_UNAVAILABLE` 错误，而不会改变 schema。 |
 | `@deepseek-ai/dsh-tool-ralph` | `ralph` | `ctx.tools`、`ctx.workflowEngine`、`ctx.subagents`、`ctx.systemPrompt`、`a calling Agent (exec.agent parents every fresh round)` | `tool/call`、`tool/result`、`workflow and child session events during execution` | - | 固定的前台工作流会在每个 Round 启动一个全新的结构化子级；模型只能选择不可变目标和可选的 Round 上限。 |
 | `@deepseek-ai/dsh-tool-skill` | `skill` | `ctx.workingDirectory`、`ctx.tools`、`ctx.agents`、`ctx.skills` | `tool/call`、`tool/result`、`user/message replacement catalogs via agent.inject()` | - | - |
@@ -1442,7 +1442,7 @@ create、edit、pause 和 resume 要求直接来自人类的根权限；complete
 
 ### `schedule_create`
 
-在当前会话中创建一条提醒，到期时投递 prompt。请恰好提供一个时间参数：after_seconds、at、every_seconds、daily、weekly 或 cron。时区中不存在的本地时间会被跳过；重复出现的本地时间只在较早的时刻触发一次。停机后，重复提醒只投递最近错过的一次。崩溃后可能重复投递。
+在当前会话中创建一条提醒，到期时投递 prompt。请恰好提供一个时间参数：after_seconds、at、every_seconds、daily、weekly 或 cron。时区中不存在的本地时间会被跳过；重复出现的本地时间只在较早的时刻触发一次。停机后，重复提醒只投递最近错过的一次。崩溃后可能重复投递。可选动作直接执行保存的代码，不调用模型。创建或替换代码要求 danger-full-access，或本次调用获得审批。运行保持在已保存的 Session 沙箱上限以内。已中断的脚本运行不重跑；回报输出会保存，并可能发送给模型。
 
 ```json
 {
@@ -1556,6 +1556,83 @@ create、edit、pause 和 resume 要求直接来自人类的根权限；complete
         }
       ],
       "description": "Absolute target: an RFC 3339 date-time with offset, or a local date, time, and IANA time_zone."
+    },
+    "action": {
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "Run a shell command in the saved working directory under the Session sandbox policy. No model is called.",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "command"
+            },
+            "spec": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "description": "Shell command to execute."
+                }
+              },
+              "required": [
+                "command"
+              ]
+            },
+            "timeout_seconds": {
+              "type": "integer",
+              "description": "Optional positive elapsed deadline in whole seconds."
+            }
+          },
+          "required": [
+            "kind",
+            "spec"
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Use an async TypeScript function body with await and return. No host functions, tools, or callLLM are provided.",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "program"
+            },
+            "spec": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "description": "Program source to execute."
+                }
+              },
+              "required": [
+                "source"
+              ]
+            },
+            "timeout_seconds": {
+              "type": "integer",
+              "description": "Optional positive elapsed deadline in whole seconds."
+            }
+          },
+          "required": [
+            "kind",
+            "spec"
+          ]
+        }
+      ]
+    },
+    "report": {
+      "type": "string",
+      "description": "Script result reporting: always (default), only on failure, or never. Reported output enters the Session log and is sent to the model.",
+      "enum": [
+        "always",
+        "on-failure",
+        "never"
+      ]
     }
   },
   "required": [
@@ -1603,7 +1680,7 @@ create、edit、pause 和 resume 要求直接来自人类的根权限；complete
 
 ### `schedule_update`
 
-原地修改一条提醒并保留其 id。提供新的 title、prompt，或至多一个时间参数；未提供的字段保持原值。需要相对延迟时请新建一条提醒。
+原地修改一条提醒并保留其 id。提供新的 title、prompt，或至多一个时间参数；未提供的字段保持原值。需要相对延迟时请新建一条提醒。可选动作直接执行保存的代码，不调用模型。创建或替换代码要求 danger-full-access，或本次调用获得审批。运行保持在已保存的 Session 沙箱上限以内。已中断的脚本运行不重跑；回报输出会保存，并可能发送给模型。
 
 ```json
 {
@@ -1717,6 +1794,83 @@ create、edit、pause 和 resume 要求直接来自人类的根权限；complete
         }
       ],
       "description": "Absolute target: an RFC 3339 date-time with offset, or a local date, time, and IANA time_zone."
+    },
+    "action": {
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "Run a shell command in the saved working directory under the Session sandbox policy. No model is called.",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "command"
+            },
+            "spec": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "description": "Shell command to execute."
+                }
+              },
+              "required": [
+                "command"
+              ]
+            },
+            "timeout_seconds": {
+              "type": "integer",
+              "description": "Optional positive elapsed deadline in whole seconds."
+            }
+          },
+          "required": [
+            "kind",
+            "spec"
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Use an async TypeScript function body with await and return. No host functions, tools, or callLLM are provided.",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "program"
+            },
+            "spec": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "description": "Program source to execute."
+                }
+              },
+              "required": [
+                "source"
+              ]
+            },
+            "timeout_seconds": {
+              "type": "integer",
+              "description": "Optional positive elapsed deadline in whole seconds."
+            }
+          },
+          "required": [
+            "kind",
+            "spec"
+          ]
+        }
+      ]
+    },
+    "report": {
+      "type": "string",
+      "description": "Script result reporting: always (default), only on failure, or never. Reported output enters the Session log and is sent to the model.",
+      "enum": [
+        "always",
+        "on-failure",
+        "never"
+      ]
     }
   },
   "required": [
@@ -1727,7 +1881,7 @@ create、edit、pause 和 resume 要求直接来自人类的根权限；complete
 
 Source: [`packages/schedule/tool-schedule/src/index.ts`](../packages/schedule/tool-schedule/src/index.ts)
 
-preset 或 Agent scope 挂载本包；由 preset 决定哪些 agent 获得这四个管理工具。每次调用都作用于调用方 Agent 的 Session。接受 after_seconds、显式绝对 at、有界固定速率 every_seconds、带显式 IANA 时区的每日与每周本地时间，以及作为五字段表达式的 cron。管理使用宿主 storage domain；到期消息会恢复原 Session。
+preset 或 Agent scope 挂载本包；由 preset 决定哪些 agent 获得这四个管理工具。每次调用都作用于调用方 Agent 的 Session。接受 after_seconds、显式绝对 at、有界固定速率 every_seconds、带显式 IANA 时区的每日与每周本地时间，以及作为五字段表达式的 cron。管理使用宿主 storage domain。已挂载的 command 和 program 提供方增加可选 action/report 字段；创建或替换代码要求 danger-full-access 或单次审批，不放宽未来执行策略。提醒恢复原 Session；脚本直接执行，并可选择回报结果。本目录展示两种随附动作提供方；没有挂载的提供方不会贡献其动作 schema 分支。
 
 <a id="deepseek-aidsh-tool-lsp"></a>
 

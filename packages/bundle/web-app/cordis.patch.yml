@@ -138,6 +138,10 @@
     # which declare them in their own scope.
     - id: schedule
       name: '@deepseek-ai/dsh-schedule'
+    - id: schedule-action-command
+      name: '@deepseek-ai/dsh-schedule-action-command'
+    - id: schedule-action-program
+      name: '@deepseek-ai/dsh-schedule-action-program'
 
     # Configuration-surface reads and writes over Typert Remote. Each method
     # reports an actionable error when its settings-domain provider is absent.

@@ -33,7 +33,7 @@ This table connects model-visible tool names to the plugin package and service s
 | `@deepseek-ai/dsh-tool-fs-search` | `glob`, `grep` | `ctx.workingDirectory`, `ctx.tools`, `ctx.subprocess`, `ctx.systemPrompt` | `tool/call`, `tool/result` | - | glob and grep are unconditional discovery tools that spawn the packaged ripgrep binary (`@vscode/ripgrep`) through ctx.subprocess as ordinary foreground calls (never background jobs) — no host `rg` install and no shell layer. The catalog uses `sampleOverCapGlobResults: true`; deployments must choose that behavior explicitly. Capped results save the complete formatted list through the optional ctx.spillStore backend; returned locators are follow-up-readable/searchable when the backend exposes local paths in co-located deployments. |
 | `@deepseek-ai/dsh-tool-terminal` | `terminal_close`, `terminal_list`, `terminal_open`, `terminal_read`, `terminal_send`, `terminal_signal` | `ctx.workingDirectory`, `ctx.tools`, `ctx.terminals`, `ctx.systemPrompt`, `ctx.jobs at call time for run_in_background` | `tool/call`, `tool/result` | - | The six terminal tools are opt-in and complement one-shot shell/filesystem tools. `terminal_send(run_in_background: true)` registers with `ctx.jobs`; TUI, named key sequences, BEL, resize, auto-start, and cross-agent sharing are absent from the schema. |
 | `@deepseek-ai/dsh-tool-goal` | `create_goal`, `get_goal`, `update_goal` | `ctx.tools`, `ctx.agents`, `ctx.goals`, `ctx.systemPrompt`, `a calling Agent in an authorized open turn` | `tool/call`, `goal/change for mutations`, `tool/result` | - | create, edit, pause, and resume require direct-human root authority; complete and blocked also accept the exact current goal round. The default blocked lower bound is three admitted rounds. |
-| `@deepseek-ai/dsh-tool-schedule` | `schedule_create`, `schedule_delete`, `schedule_list`, `schedule_update` | `ctx.tools`, `ctx.schedule` | `tool/call`, `Schedule storage domain create, update, or delete`, `tool/result` | - | A preset or Agent scope mounts this package; the preset decides which agents receive the four management tools. Each call acts on the calling Agent's Session. Accepts after_seconds, explicit absolute at, bounded fixed-rate every_seconds, daily and weekly local times in an explicit IANA zone, and cron as a five-field expression. Management uses the Host storage domain; due messages resume the original Session. |
+| `@deepseek-ai/dsh-tool-schedule` | `schedule_create`, `schedule_delete`, `schedule_list`, `schedule_update` | `ctx.tools`, `ctx.schedule` | `tool/call`, `Schedule storage domain create, update, or delete`, `tool/result` | - | A preset or Agent scope mounts this package; the preset decides which agents receive the four management tools. Each call acts on the calling Agent's Session. Accepts after_seconds, explicit absolute at, bounded fixed-rate every_seconds, daily and weekly local times in an explicit IANA zone, and cron as a five-field expression. Management uses the Host storage domain. Mounted command and program providers add optional action/report fields; creating or replacing code requires danger-full-access or single-call approval, without widening future execution policy. Prompt reminders resume the original Session; scripts run directly with optional result reporting. This catalog shows both shipped action providers; absent providers remove their action schema branches. |
 | `@deepseek-ai/dsh-tool-lsp` | `lsp` | `ctx.workingDirectory`, `ctx.tools`, `ctx.lsp`, `ctx.systemPrompt` | `tool/call`, `tool/result` | - | The lsp tool keeps provider selection and language-server subprocesses behind ctx.lsp, so its model-visible schema stays stable across providers. Requires a registered provider (e.g. `@deepseek-ai/dsh-lsp-stdio`) at runtime; without one, a query returns the structured `LSP_UNAVAILABLE` error rather than changing the schema. |
 | `@deepseek-ai/dsh-tool-ralph` | `ralph` | `ctx.tools`, `ctx.workflowEngine`, `ctx.subagents`, `ctx.systemPrompt`, `a calling Agent (exec.agent parents every fresh round)` | `tool/call`, `tool/result`, `workflow and child session events during execution` | - | A fixed foreground workflow starts one fresh structured child per round; the model selects only the immutable objective and an optional round cap. |
 | `@deepseek-ai/dsh-tool-skill` | `skill` | `ctx.workingDirectory`, `ctx.tools`, `ctx.agents`, `ctx.skills` | `tool/call`, `tool/result`, `user/message replacement catalogs via agent.inject()` | - | - |
@@ -1436,7 +1436,7 @@ create, edit, pause, and resume require direct-human root authority; complete an
 
 ### `schedule_create`
 
-Create a reminder in the current session that delivers prompt when it becomes due. Supply exactly one timing parameter: after_seconds, at, every_seconds, daily, weekly, or cron. Local times that do not exist in the zone are skipped; repeated local times fire once, at the earlier instant. After downtime, a recurring reminder delivers only its latest missed occurrence. Delivery can repeat after a crash.
+Create a reminder in the current session that delivers prompt when it becomes due. Supply exactly one timing parameter: after_seconds, at, every_seconds, daily, weekly, or cron. Local times that do not exist in the zone are skipped; repeated local times fire once, at the earlier instant. After downtime, a recurring reminder delivers only its latest missed occurrence. Delivery can repeat after a crash. Optional actions execute saved code directly without calling a model. Creation or code replacement requires danger-full-access or approval for this call. Runs remain under the saved Session sandbox ceiling. Crashed runs are not repeated; report output is saved and may be sent to the model.
 
 ```json
 {
@@ -1550,6 +1550,83 @@ Create a reminder in the current session that delivers prompt when it becomes du
         }
       ],
       "description": "Absolute target: an RFC 3339 date-time with offset, or a local date, time, and IANA time_zone."
+    },
+    "action": {
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "Run a shell command in the saved working directory under the Session sandbox policy. No model is called.",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "command"
+            },
+            "spec": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "description": "Shell command to execute."
+                }
+              },
+              "required": [
+                "command"
+              ]
+            },
+            "timeout_seconds": {
+              "type": "integer",
+              "description": "Optional positive elapsed deadline in whole seconds."
+            }
+          },
+          "required": [
+            "kind",
+            "spec"
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Use an async TypeScript function body with await and return. No host functions, tools, or callLLM are provided.",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "program"
+            },
+            "spec": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "description": "Program source to execute."
+                }
+              },
+              "required": [
+                "source"
+              ]
+            },
+            "timeout_seconds": {
+              "type": "integer",
+              "description": "Optional positive elapsed deadline in whole seconds."
+            }
+          },
+          "required": [
+            "kind",
+            "spec"
+          ]
+        }
+      ]
+    },
+    "report": {
+      "type": "string",
+      "description": "Script result reporting: always (default), only on failure, or never. Reported output enters the Session log and is sent to the model.",
+      "enum": [
+        "always",
+        "on-failure",
+        "never"
+      ]
     }
   },
   "required": [
@@ -1597,7 +1674,7 @@ Source: [`packages/schedule/tool-schedule/src/index.ts`](../packages/schedule/to
 
 ### `schedule_update`
 
-Change a reminder in place, keeping its id. Supply a new title, prompt, or at most one timing parameter; omitted fields keep their stored values. To change a relative delay, create a new reminder.
+Change a reminder in place, keeping its id. Supply a new title, prompt, or at most one timing parameter; omitted fields keep their stored values. To change a relative delay, create a new reminder. Optional actions execute saved code directly without calling a model. Creation or code replacement requires danger-full-access or approval for this call. Runs remain under the saved Session sandbox ceiling. Crashed runs are not repeated; report output is saved and may be sent to the model.
 
 ```json
 {
@@ -1711,6 +1788,83 @@ Change a reminder in place, keeping its id. Supply a new title, prompt, or at mo
         }
       ],
       "description": "Absolute target: an RFC 3339 date-time with offset, or a local date, time, and IANA time_zone."
+    },
+    "action": {
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "Run a shell command in the saved working directory under the Session sandbox policy. No model is called.",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "command"
+            },
+            "spec": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "description": "Shell command to execute."
+                }
+              },
+              "required": [
+                "command"
+              ]
+            },
+            "timeout_seconds": {
+              "type": "integer",
+              "description": "Optional positive elapsed deadline in whole seconds."
+            }
+          },
+          "required": [
+            "kind",
+            "spec"
+          ]
+        },
+        {
+          "type": "object",
+          "description": "Use an async TypeScript function body with await and return. No host functions, tools, or callLLM are provided.",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "program"
+            },
+            "spec": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "description": "Program source to execute."
+                }
+              },
+              "required": [
+                "source"
+              ]
+            },
+            "timeout_seconds": {
+              "type": "integer",
+              "description": "Optional positive elapsed deadline in whole seconds."
+            }
+          },
+          "required": [
+            "kind",
+            "spec"
+          ]
+        }
+      ]
+    },
+    "report": {
+      "type": "string",
+      "description": "Script result reporting: always (default), only on failure, or never. Reported output enters the Session log and is sent to the model.",
+      "enum": [
+        "always",
+        "on-failure",
+        "never"
+      ]
     }
   },
   "required": [
@@ -1721,7 +1875,7 @@ Change a reminder in place, keeping its id. Supply a new title, prompt, or at mo
 
 Source: [`packages/schedule/tool-schedule/src/index.ts`](../packages/schedule/tool-schedule/src/index.ts)
 
-A preset or Agent scope mounts this package; the preset decides which agents receive the four management tools. Each call acts on the calling Agent's Session. Accepts after_seconds, explicit absolute at, bounded fixed-rate every_seconds, daily and weekly local times in an explicit IANA zone, and cron as a five-field expression. Management uses the Host storage domain; due messages resume the original Session.
+A preset or Agent scope mounts this package; the preset decides which agents receive the four management tools. Each call acts on the calling Agent's Session. Accepts after_seconds, explicit absolute at, bounded fixed-rate every_seconds, daily and weekly local times in an explicit IANA zone, and cron as a five-field expression. Management uses the Host storage domain. Mounted command and program providers add optional action/report fields; creating or replacing code requires danger-full-access or single-call approval, without widening future execution policy. Prompt reminders resume the original Session; scripts run directly with optional result reporting. This catalog shows both shipped action providers; absent providers remove their action schema branches.
 
 <a id="deepseek-aidsh-tool-lsp"></a>
 

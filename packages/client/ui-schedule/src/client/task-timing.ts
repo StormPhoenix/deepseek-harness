@@ -197,6 +197,10 @@ export function timingError(code: Extract<ScheduleUpdateResult, { code: string }
     case 'invalid_selector':
     case 'invalid_rule':
     case 'time_out_of_range': return 'timing.invalid'
+    // The editor never sends a script action or report policy, so these only signal an unexpected Host reply.
+    case 'not_script_task':
+    case 'invalid_action':
+    case 'action_unavailable':
     case 'internal_error': return 'timing.error'
   }
   /* v8 ignore next -- Exhaustiveness guard for the closed ScheduleUpdateResult error-code union. */

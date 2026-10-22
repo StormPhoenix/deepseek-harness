@@ -259,6 +259,10 @@ type ScheduleView = ScheduleRecord & {
   readonly state: ScheduleState
   /** Reminder delivery never leaves the owning session. */
   readonly deliveryMode: ScheduleDeliveryMode
+  /** Script action configuration when this task runs a program or command. */
+  readonly action?: ScheduleActionSummary
+  /** Script result report policy; absent on prompt reminders. */
+  readonly report?: ScheduleReportPolicy
 }
 ```
 
@@ -340,6 +344,14 @@ type ScheduleCatalogEntry = ScheduleRecord & {
   readonly status: 'active' | 'inactive'
   /** Most recent durably acknowledged inbox delivery, when available. */
   readonly lastDelivery?: ScheduleDeliveryReceipt
+  /** Script action this task runs; absent on a prompt reminder. */
+  readonly action?: ScheduleActionSummary
+  /** Result delivery policy of a script task; absent on a prompt reminder. */
+  readonly report?: ScheduleReportPolicy
+  /** Present while a run of this script task is in flight. */
+  readonly running?: { readonly runId: string; readonly startedAt: string }
+  /** Most recent saved script run, when available. */
+  readonly lastRun?: ScheduleRunRecord
 }
 ```
 
@@ -368,6 +380,15 @@ interface ScheduleUpdateRequest extends ScheduleDeleteRequest, ScheduleUpdateCon
   readonly expected: ScheduleRecord
   /** New timing; its kind may differ from the stored record's kind, and an omitted value keeps the committed target. */
   readonly change?: ScheduleTimingChange
+  /**
+   * Replacement action of a script task, compared against `expectedAction`.
+   * A prompt reminder cannot become a script task through an update.
+   */
+  readonly action?: ScheduleActionInput
+  /** Source and timeout observed when editing began; required with `action`. */
+  readonly expectedAction?: { readonly kind: string; readonly source: string; readonly timeoutMs?: number }
+  /** Replacement result delivery policy of a script task. */
+  readonly report?: ScheduleReportPolicy
 }
 ```
 
@@ -435,17 +456,17 @@ type ScheduleDeliveryHistoryResult =
 
 新任务初始化空历史。缺少历史字段的旧任务仅展示已有的最近一次回执，标明更早记录不可用，且读取不会重写任务行。后续确认会保留该回执，并追加带有指令快照的真实新回执。已丢失的历史与缺失的旧指令快照不会被重建。历史、最近回执、状态和下一目标由同一次任务行写入提交；显式删除任务会停止后续投递、把任务行连同其已保存的回执一并移除，并使其离开 `list` 与 `catalog`；对话消息不受影响。已保存的发送记录在追加确认时按配置的 `deliveryHistoryDays` 窗口（以每条回执的 `deliveredAt` 向前计算）与 `deliveryHistoryRecords` 条数上限裁剪；新追加的最近一次回执始终保留，发生裁剪时标记更早记录不可用。分页限制返回的记录数量，不限制存储大小或指令字节数。
 
-## 宿主投递
+## 提醒任务投递
 
-宿主启动时读取持久任务，并将定时器设为最早的活动目标。未运行任务仍可查询，但不会再次安排投递。投递时通过 Session controller 获取原 Session，包括尚未加载的 Session。恢复后重新采样实际时间，并排除时钟回拨后尚未到期的成员；这些任务仍保留定时义务。投递不涉及 Goal 或独立的 Run 完成记录。
+宿主启动时读取持久任务，存在 Loader 时等待组合完成，再将定时器设为最早的活动目标。未运行任务仍可查询，但不会再次安排投递。投递时通过 Session controller 获取原 Session，包括尚未加载的 Session。恢复后重新采样实际时间，并排除时钟回拨后尚未到期的成员；这些任务仍保留定时义务。投递不涉及 Goal 或独立的 Run 完成记录。
 
 插件来源的 `followup()` 同步将消息追加到 Session 收件箱。Session flush 成功后，一次任务记录 put 追加带有指令快照的发送记录，并同时存储最新的 `ScheduleDeliveryReceipt`，以及一次性任务的 `inactive` 状态或重复任务的下一目标和状态。同一批次的重复任务共享回执的 `messageId`；每条回执保留该任务已投递的发生时点。投递不会中途引导或取消当前轮次，也不等待模型完成。
 
-Session 获取、消息入队或持久化确认失败时，任务继续保存在存储中，并报告宿主警告。后续管理变更或宿主重启会重试。Session 持久化与任务 put 不具有跨存储原子性。收件箱已持久化、任务尚未 put 时发生崩溃，可能重复投递；回执并未消除这一间隔。Schedule 不提供模型结果回执、执行取消或外部通知渠道。
+Session 获取、消息入队或持久化确认失败时，任务继续保存在存储中，并报告宿主警告。后续管理变更或宿主重启会重试。Session 持久化与任务 put 不具有跨存储原子性。收件箱已持久化、任务尚未 put 时发生崩溃，可能重复投递；回执并未消除这一间隔。提醒任务不提供模型结果回执，也不取消模型的工作；Schedule 没有外部通知渠道。
 
 ## 立即运行
 
-`schedule.run({ sessionId, id })` 立即投递某个活动任务已保存的指令，并与调度投递及管理写入共用同一条串行队列。它渲染相同的框架文本、追加相同的 `followup()` 消息，并要求相同的 Session flush，因此 Session 的反应与到期任务完全一致。它不消耗任何一次发生：`status` 与 `scheduledAt` 均不变，定时器也不重算，计划保持装载状态，任务仍会在既定时刻触发。保存的回执带有 `manual: true` 以及它执行时所依据的已提交目标，运行记录视图据此区分人工运行与计划投递；保留规则与其他回执一样裁剪它。任务不存在或绑定不符返回 `schedule_not_found`，已结束任务返回 `schedule_ended`，委派子代理的 Session 返回 `subagent_session`，无法取得原 Session 返回 `session_unavailable`。该方法不新增任何模型可见面：投递的消息就是常规提醒框架，也没有模型工具包装它。
+脚本任务的 `schedule.run()` 持久化运行中标记，返回 `runId` 与 `startedAt` 作为接纳证据，而不是完成证据，并保留已提交的计划。重复触发返回 `schedule_running`；通过 `schedule.runs()` 查询结果。提醒任务则立即投递某个活动任务已保存的指令，并与调度投递及管理写入共用同一条串行队列。它渲染相同的框架文本、追加相同的 `followup()` 消息，并要求相同的 Session flush，因此 Session 的反应与到期任务完全一致。它不消耗任何一次发生：`status` 与 `scheduledAt` 均不变，定时器也不重算，计划保持装载状态，任务仍会在既定时刻触发。保存的回执带有 `manual: true` 以及它执行时所依据的已提交目标，运行记录视图据此区分人工运行与计划投递；保留规则与其他回执一样裁剪它。任务不存在或绑定不符返回 `schedule_not_found`，已结束任务返回 `schedule_ended`，委派子代理的 Session 返回 `subagent_session`，无法取得原 Session 返回 `session_unavailable`。该方法不新增任何模型可见面：投递的消息就是常规提醒框架，也没有模型工具包装它。
 
 ```ts type-equiv
 /** Immediate-run request within the original Session binding. */
@@ -458,12 +479,227 @@ interface ScheduleRunRequest extends ScheduleListRequest {
 ```ts type-equiv
 /**
  * Non-mutating immediate-run outcome: the rule, its committed target, and its
- * status are unchanged; the delivery itself is recorded as a manual receipt.
+ * status are unchanged. A prompt reminder reports its saved manual receipt; a
+ * script task reports the started run, whose result arrives as a run record.
  */
 type ScheduleRunResult =
   | { readonly id: ScheduleId; readonly ran: true; readonly deliveredAt: string }
-  | { readonly id: ScheduleId; readonly ran: false; readonly code: 'schedule_not_found' | 'schedule_ended' | 'session_unavailable' }
+  | { readonly id: ScheduleId; readonly ran: true; readonly runId: string; readonly startedAt: string }
+  | {
+    readonly id: ScheduleId
+    readonly ran: false
+    readonly code: 'schedule_not_found' | 'schedule_ended' | 'session_unavailable' | 'schedule_running'
+  }
   | SubagentSessionError
+```
+
+## 脚本任务契约
+
+脚本任务保留现有时间记录和原 Session 绑定。可选动作、回报策略、保存的目录、权限上限和执行历史随任务行一起存储；旧的纯提醒任务仍可读取。提供方校验不透明 JSON 规格，按收到的策略负责执行。动作 schema 使用工具值 schema DSL，不是原始 JSON Schema。生命周期、审批、超时和回报语义见 [Schedule 包](../../packages/schedule/schedule/README.zh.md#script-actions)。
+
+```ts type-equiv
+/**
+ * When a script task's run result is delivered to its Session:
+ * `always` after every run, `on-failure` only after a run that did not succeed,
+ * `never` keeps the result in the task's run records only.
+ */
+type ScheduleReportPolicy = 'always' | 'on-failure' | 'never'
+```
+
+```ts type-equiv
+/** Browser-safe description of a task's script action; absent on a prompt reminder. */
+interface ScheduleActionSummary {
+  /** Registered action provider kind, such as `command` or `program`. */
+  readonly kind: string
+  /** Provider-rendered one-line summary, or a bounded JSON rendering when the provider is not mounted. */
+  readonly summary: string
+  /** Complete stored source the action runs, rendered for read-only display. */
+  readonly source: string
+  /** Per-task elapsed budget in milliseconds; absent uses the Host default. */
+  readonly timeoutMs?: number
+  /** Absolute working directory captured at creation. */
+  readonly cwd: string
+  /** Widest sandbox mode a run may use; the Session's current mode narrows it further. */
+  readonly sandboxCeiling: 'read-only' | 'workspace-write' | 'danger-full-access'
+  /** Whether the Host currently mounts a provider for this kind. */
+  readonly available: boolean
+}
+```
+
+```ts type-equiv
+/**
+ * Script action requested at creation or replacement. `spec` is untrusted
+ * provider input: the provider registered for `kind` validates and normalizes it.
+ */
+interface ScheduleActionInput {
+  /** Registered action provider kind. */
+  readonly kind: string
+  /** Provider-specific specification, such as `{ command }` or `{ source }`. */
+  readonly spec: JsonValue
+  /** Per-task elapsed budget in milliseconds; capped by the Host's configured maximum. */
+  readonly timeoutMs?: number
+}
+```
+
+```ts type-equiv
+/**
+ * Host-side context a script-task creation carries from its trusted caller.
+ * The tool consumer captures these from the calling Agent; they are never model input.
+ */
+interface ScheduleActionBinding {
+  /** Absolute working directory every run of this task starts in. */
+  readonly cwd: string
+  /** Sandbox mode of the creating Session; runs never use a wider mode. */
+  readonly sandboxCeiling: 'read-only' | 'workspace-write' | 'danger-full-access'
+}
+```
+
+```ts type-equiv
+/** Script-task part of a creation request; prompt-reminder creation omits it. */
+interface ScheduleCreateActionRequest {
+  /** Action to run when due; `prompt` then frames the delivered run result for the model. */
+  readonly action: ScheduleActionInput
+  /** Result delivery policy; omitted delivers every result. */
+  readonly report?: ScheduleReportPolicy
+  /** Trusted creation context. */
+  readonly binding: ScheduleActionBinding
+}
+```
+
+## 执行记录
+
+```ts type-equiv
+/**
+ * Terminal classification of one script run.
+ *
+ * - `succeeded` / `failed` — the action ran and reported its own success or failure.
+ * - `timeout` — the elapsed budget expired.
+ * - `aborted` — deletion or Host shutdown cancelled the run.
+ * - `sandbox-denied` — the Session's sandbox refused a file effect or could not be established.
+ * - `skipped` — the previous run of the same task was still in flight.
+ * - `interrupted` — the Host stopped while the run was in flight; the run is never repeated.
+ * - `unavailable` — no provider for the kind is mounted, or the Session could not be resolved.
+ */
+type ScheduleRunOutcome =
+  | 'succeeded' | 'failed' | 'timeout' | 'aborted' | 'sandbox-denied' | 'skipped' | 'interrupted' | 'unavailable'
+```
+
+```ts type-equiv
+/** One saved script run; delivery to the Session is optional and recorded by message id. */
+interface ScheduleRunRecord {
+  /** Globally unique run identity. */
+  readonly runId: string
+  /** Occurrence target the run served, or the armed target a manual run ran under. */
+  readonly scheduledAt: string
+  /** Canonical UTC time the run started (or was decided, for runs that never started). */
+  readonly startedAt: string
+  /** Canonical UTC time the outcome was recorded. */
+  readonly finishedAt: string
+  /** Person-triggered run; absent means the rule's own schedule started it. */
+  readonly manual?: true
+  /** Terminal classification. */
+  readonly outcome: ScheduleRunOutcome
+  /** Process exit code for actions that report one; null when a signal ended the process. */
+  readonly exitCode?: number | null
+  /** Captured output, cut to the Host's configured byte budget. */
+  readonly output: string
+  /** Whether bytes were dropped from `output`. */
+  readonly outputTruncated: boolean
+  /** Message that delivered this result to the Session, when the report policy delivered it. */
+  readonly messageId?: MessageId
+}
+```
+
+```ts type-equiv
+/** Explicitly bounded saved-run query within one Session binding. */
+interface ScheduleRunHistoryRequest extends ScheduleDeleteRequest {
+  /** Required safe-integer page size from 1 through 100. */
+  limit: number
+  /** Run identity of the oldest entry in the previous page; excluded from this page. */
+  before?: string
+}
+```
+
+```ts type-equiv
+/** Newest-first saved script runs, or a non-mutating task/cursor lookup failure. */
+type ScheduleRunHistoryResult =
+  | {
+    readonly id: ScheduleId
+    readonly records: ScheduleRunRecord[]
+    /** True only after an append removed saved records. */
+    readonly earlierRecordsPruned: boolean
+    /** Current Host retention configuration, shared with delivery history. */
+    readonly retention: DeliveryRetentionBounds
+    /** Oldest returned run identity, present only when older saved records remain. */
+    readonly nextBefore?: string
+  }
+  | { readonly id: ScheduleId; readonly code: 'schedule_not_found' | 'run_cursor_not_found' }
+```
+
+## 动作提供方契约
+
+```ts type-equiv
+/** Execution context one run receives; every value is resolved before the provider runs. */
+interface ScheduleActionEnv {
+  /** The bound Session's current policy, narrowed to the task's creation-time ceiling. */
+  readonly sandboxPolicy: SandboxExecutionPolicy
+  /** Absolute working directory captured at creation. */
+  readonly cwd: string
+  /** Elapsed budget after Host defaulting and capping. */
+  readonly timeoutMs: number
+  /** Fires on task deletion, archive stop, or Host disposal. */
+  readonly signal: AbortSignal
+}
+```
+
+```ts type-equiv
+/** Provider-reported terminal outcome of one run; the Host truncates and saves it. */
+interface ScheduleActionResult {
+  /** Classification a provider can observe, including an unavailable execution language or substrate. */
+  readonly outcome: 'succeeded' | 'failed' | 'timeout' | 'aborted' | 'sandbox-denied' | 'unavailable'
+  /** Process exit code, for actions that run one process. */
+  readonly exitCode?: number | null
+  /** Complete captured output; the Host applies its byte budget. */
+  readonly output: string
+  /** Whether the provider's own capture already dropped bytes. */
+  readonly outputTruncated?: boolean
+}
+```
+
+```ts type-equiv
+/**
+ * One script-action kind. Providers register through
+ * {@link ScheduleActionRegistry.register}; the Host owns timing, storage,
+ * reporting, and cancellation, and the provider owns its specification.
+ */
+interface ScheduleActionProvider {
+  /** Kind stored on task rows; also the tool consumer's discriminator. */
+  readonly kind: string
+  /** Model-facing description of what this kind runs and how its output is captured. */
+  readonly description: string
+  /** Tool DSL schema of the specification object; required properties use `required: true`. */
+  readonly specSchema: ValueSchemaSpec
+  /**
+   * Validate untrusted input at creation and at run time.
+   * @param spec - Model or durable specification.
+   * @returns The canonical specification the Host stores.
+   * @throws ScheduleInputError with `invalid_action` when the specification is invalid.
+   */
+  decode(spec: unknown): JsonValue
+  /**
+   * Render the stored specification for read-only display and update comparison.
+   * @param spec - Canonical specification returned by decode.
+   * @returns The complete source text the action runs.
+   */
+  source(spec: JsonValue): string
+  /**
+   * Run once. Failures of the action resolve as outcomes; only provider contract misuse rejects.
+   * @param spec - Canonical specification returned by decode.
+   * @param env - Resolved policy, directory, budget, and cancellation.
+   * @returns The terminal outcome and captured output.
+   */
+  run(spec: JsonValue, env: ScheduleActionEnv): Promise<ScheduleActionResult>
+}
 ```
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
@@ -496,9 +732,10 @@ Shared management service; reads, deletion, and timing edits never activate a Se
  * @param sessionId - Original Session receiving the reminder.
  * @param request - Validated tool selector, required title, and reminder content.
  * @param signal - Optional cancellation checked before persistence begins, including after FIFO waits.
+ * @param script - Script action, report policy, and trusted binding; omitted creates a prompt reminder.
  * @returns The durably stored schedule. Cancellation does not roll back an in-flight write.
  */
-async create(sessionId: SessionId, request: ScheduleCreateRequest, signal?: AbortSignal): Promise<ScheduleRecord>
+async create( sessionId: SessionId, request: ScheduleCreateRequest, signal?: AbortSignal, script?: ScheduleCreateActionRequest, ): Promise<ScheduleRecord>
 
 /**
  * Read the selected Session's active tasks without resuming its Agent.
@@ -514,6 +751,14 @@ async create(sessionId: SessionId, request: ScheduleCreateRequest, signal?: Abor
  * @returns Reminders ordered by scheduledAt ascending, then lexicographically by id.
  */
 @Remote('catalog') async catalog(): Promise<ScheduleCatalogEntry[]>
+
+/**
+ * Read saved script runs without activating or reading the original Session.
+ * @param request - Session binding, task identity, explicit limit, and optional exclusive run cursor.
+ * @returns Newest-first runs, or a task/cursor lookup failure; a prompt reminder has no runs.
+ * @throws ScheduleInputError when limit is not a safe integer from 1 through 100.
+ */
+@Remote('runs') async runs(request: ScheduleRunHistoryRequest): Promise<ScheduleRunHistoryResult>
 
 /**
  * Read saved inbox deliveries without activating or reading the original Session.
@@ -575,6 +820,21 @@ Source: [`packages/schedule/schedule/src/index.ts`](../../packages/schedule/sche
 <a id="schedule-events"></a>
 
 ### `schedule/*` events
+
+<a id="scheduleactions-changed--emit"></a>
+
+#### `schedule/actions-changed` — emit
+
+The set of mounted script-action providers changed; tool consumers refresh their action schema.
+
+```ts cordis-catalog
+/** The set of mounted script-action providers changed; tool consumers refresh their action schema.
+ * @mode emit
+ */
+'schedule/actions-changed'(): void
+```
+
+Source: [`packages/schedule/schedule/src/types.ts`](../../packages/schedule/schedule/src/types.ts)
 
 <a id="schedulechanged--emit"></a>
 

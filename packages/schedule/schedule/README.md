@@ -54,6 +54,14 @@ Archiving a Session with active reminders is refused until they stop, and choosi
 
 Every update is a complete-record compare-and-set inside the same FIFO as creation and deletion, and it preserves the task id, original Session binding, status, latest receipt, and complete saved history. Missing tasks or wrong bindings return `schedule_not_found`; inactive tasks return `schedule_ended`. If delivery, target advancement, or another edit changed the expected record, the update returns `schedule_conflict` without overwriting it. Name, instruction, and timing validation errors retain their specific codes; storage failures reject rather than report persisted success. Refresh the catalog and capture a new expected record before retrying a conflict. See the [task page](../../client/ui-schedule/README.md) for the staged form's Save and Cancel behavior.
 
+### Script actions
+
+`ctx.schedule.actions.register(provider)` adds an action kind and returns its disposer. Providers own specification validation, source rendering, and execution; Schedule owns timing, storage, cancellation, and reporting. The shipped [command](../schedule-action-command/README.md) and [program](../schedule-action-program/README.md) providers use the existing shell and PTC runtimes. Program actions expose no model/tool bindings. Creation accepts its optional script part separately from the timing record, with the trusted caller's captured directory and sandbox ceiling. Model consumers must authorize creation and code replacement before calling the service.
+
+Script tasks persist the advanced plan and in-flight run before executing outside the management queue. Only the latest missed occurrence runs; an occurrence while the previous run remains in flight is saved as skipped. Updates to an in-flight task return `schedule_conflict`, so an old execution cannot inherit a newly edited report policy or prompt. Recovered in-flight runs are saved as interrupted and never repeated. Active executions participate in Session archive admission even after a one-shot plan ends. Deletion cancels execution; repeated failures never automatically end a recurring plan.
+
+`runs({sessionId, id, limit, before?})` pages saved execution records by exclusive run-id cursor. History keeps the same day and record limits as reminder deliveries. `runOutputBytes` defaults to 16384, `actionTimeoutMs` to 120000, and `maxActionTimeoutMs` to 600000. The deadline includes Session restoration; cancellations stop waiting for an unresponsive resolver, and a late result cannot launch code. `report` is `always` by default, `on-failure` for unsuccessful runs only, or `never` for saved records only. A failed report leaves a saved execution without a message id. Manual script runs return admission (`runId`, `startedAt`), not completion; reminder manual runs retain their delivery-acknowledgment response.
+
 <a id="understand-the-implementation"></a>
 ## Understand the implementation
 

@@ -6,6 +6,7 @@ import { expect, it, vi } from 'vitest'
 import { createAfterScheduleRecord, ScheduleId } from '../src/domain.ts'
 import { ScheduleRuntime } from '../src/runtime.ts'
 import type { ScheduleTask } from '../src/storage.ts'
+import { noScripts } from './harness.ts'
 
 it('acknowledges the real synchronous inbox splice after flush without claiming model execution', async () => {
   vi.useFakeTimers()
@@ -32,7 +33,7 @@ it('acknowledges the real synchronous inbox splice after flush without claiming 
         return releaseFlush.promise
       })
       const commit = vi.fn(async (task: ScheduleTask) => { tasks[0] = task })
-      const runtime = new ScheduleRuntime(ctx, () => tasks, work => work(), commit, { days: 30, records: 200 })
+      const runtime = new ScheduleRuntime(ctx, () => tasks, work => work(), commit, { days: 30, records: 200 }, noScripts())
       try {
         runtime.requestDrive()
         await flushStarted.promise

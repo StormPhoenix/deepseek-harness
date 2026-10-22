@@ -8,7 +8,7 @@ import {
   createAfterScheduleRecord, createAtScheduleRecord, createDailyScheduleRecord, createEveryScheduleRecord, ScheduleId,
 } from '../src/domain.ts'
 import type { ScheduleTask } from '../src/storage.ts'
-import { harness, agentFor } from './harness.ts'
+import { harness, agentFor, noScripts } from './harness.ts'
 
 const tests: Awaited<ReturnType<typeof harness>>[] = []
 const runtimes: ScheduleRuntime[] = []
@@ -28,7 +28,7 @@ async function setup(tasks: ScheduleTask[]) {
     const index = tasks.findIndex(current => current.record.id === task.record.id)
     tasks[index] = task
   })
-  const runtime = new ScheduleRuntime(test.ctx, () => tasks, work => work(), commit, { days: 30, records: 200 })
+  const runtime = new ScheduleRuntime(test.ctx, () => tasks, work => work(), commit, { days: 30, records: 200 }, noScripts())
   runtimes.push(runtime)
   return { ...test, agent, followup, runtime, commit }
 }
@@ -674,7 +674,7 @@ describe('Schedule dispatch failures and concurrent changes', () => {
     const transaction = vi.fn<(work: () => Promise<void>) => Promise<void>>()
       .mockReturnValueOnce(failed.promise)
       .mockImplementation(work => work())
-    const runtime = new ScheduleRuntime(test.ctx, () => [], transaction, async () => {}, { days: 30, records: 200 })
+    const runtime = new ScheduleRuntime(test.ctx, () => [], transaction, async () => {}, { days: 30, records: 200 }, noScripts())
     runtimes.push(runtime)
     const warning = vi.spyOn(test.ctx.logger, 'warn').mockImplementationOnce(() => { runtime.requestDrive() })
     runtime.requestDrive()
@@ -695,7 +695,7 @@ describe('Schedule dispatch failures and concurrent changes', () => {
       entered.resolve(undefined)
       await released.promise
     })
-    const runtime = new ScheduleRuntime(test.ctx, () => records, transaction, async () => {}, { days: 30, records: 200 })
+    const runtime = new ScheduleRuntime(test.ctx, () => records, transaction, async () => {}, { days: 30, records: 200 }, noScripts())
     runtimes.push(runtime)
     test.ctx.effect(() => () => runtime.dispose())
     const stop = vi.spyOn(runtime, 'dispose')
@@ -739,7 +739,9 @@ describe('Schedule dispatch failures and concurrent changes', () => {
   it('drains a rejected serialization promise during disposal', async () => {
     const test = await setup([])
     const transaction = Promise.withResolvers<undefined>()
-    const runtime = new ScheduleRuntime(test.ctx, () => [], () => transaction.promise, async () => {}, { days: 30, records: 200 })
+    const runtime = new ScheduleRuntime(
+      test.ctx, () => [], () => transaction.promise, async () => {}, { days: 30, records: 200 }, noScripts(),
+    )
     runtimes.push(runtime)
     runtime.requestDrive()
     const stopped = runtime.dispose()

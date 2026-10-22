@@ -1,0 +1,40 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write packages/schedule/schedule-action-program/README.md
+/:
+  en: 8a3b35855b5433d3
+  zh: f04754e5dc7bfece
+/deepseek-ai-dsh-schedule-action-program:
+  en: 800a3b9242aa89fa
+  zh: d11f1fcfb6ded704
+/deepseek-ai-dsh-schedule-action-program/summary:
+  en: 4042fd681e10586a
+  zh: 3fede4a93386333e
+/deepseek-ai-dsh-schedule-action-program/table-of-contents:
+  en: b61871596f4215df
+  zh: 9a85aa99d88e47d0
+/deepseek-ai-dsh-schedule-action-program/usage:
+  en: 727cea08a66575d7
+  zh: 65df47d14c0b7da7
+/deepseek-ai-dsh-schedule-action-program/usage/dev-note:
+  en: c8709b197d8d7c18
+  zh: cf39ba8a6cf7d432
+/deepseek-ai-dsh-schedule-action-program/model-experience:
+  en: 215e7ba838619b7b
+  zh: a311da3843709f90
+/deepseek-ai-dsh-schedule-action-program/model-experience/action-selection:
+  en: 405d005b46103fdd
+  zh: b50d7bf936e28a19
+/deepseek-ai-dsh-schedule-action-program/model-experience/action-selection/what-the-model-sees:
+  en: 5fb77cd32968484b
+  zh: a68ecbb3e12a22ed
+/deepseek-ai-dsh-schedule-action-program/model-experience/action-selection/token-effect:
+  en: bd290e57fa6d69d2
+  zh: 8e87518b96d29cd8
+/deepseek-ai-dsh-schedule-action-program/model-experience/action-selection/kv-cache-effect:
+  en: 8841e077cf5bdc8a
+  zh: 33b24a5998275515
+/deepseek-ai-dsh-schedule-action-program/known-limitations-and-deferred-work:
+  en: bac142e06ea0e6eb
+  zh: a663cd608788ab0f

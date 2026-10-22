@@ -38,6 +38,12 @@ kind: "package-reference"
 - `schedule_update(id, <title|prompt|一个选择器>)` —— 原地替换名称、指令或时间，或它们的组合。未知或已结束的提醒返回 `updated: false` 及原因码；`after_seconds` 仅限创建时使用。
 - `schedule_delete(id)` —— 删除一条保留的提醒，无论活动还是已结束。未知或已删除的 id 返回 `deleted: false`。
 
+### 脚本任务
+
+挂载的动作提供方会为创建和更新增加可选 `action`、`report` 字段。`action` 包含 `kind`、提供方规格 `spec` 和可选正整数 `timeout_seconds`；命令使用 `spec: { command }`，程序使用 `spec: { source }`。注册或注销提供方时刷新 schema。脚本任务必填的 `prompt` 描述模型如何处理回报的输出；`report` 选择每次结果、仅失败结果或仅保存执行记录。
+
+创建或替换代码要求 Session 为 `danger-full-access`，否则需对本次调用单独审批。工具保存工作目录与常设沙箱上限，不将本次获准的提权用于后续运行。代码替换保留任务原目录与权限上限，写入前对照读取时的源码和超时。运行中任务返回冲突，不改变其执行或回报策略。脚本视图包含源码、目录、上限、可用性和回报策略。规格 schema 与执行约束仍归提供方所有。
+
 ### 最小配置
 
 ```yaml

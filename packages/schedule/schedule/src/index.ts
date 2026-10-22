@@ -1,5 +1,7 @@
 /** Host-wide durable reminders and shared human/model management. */
 import { randomUUID } from 'node:crypto'
+import { isAbsolute } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import z from '@deepseek-ai/schemastery'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { TypertRemoteService, Remote } from '@deepseek-ai/dsh-typert-protocol'
@@ -8,8 +10,11 @@ import { delegationDepthOf } from '@deepseek-ai/dsh-subagent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionActivity } from '@deepseek-ai/dsh-workspace'
 import { ScheduleRuntime } from './runtime.ts'
-import { scheduleDomain } from './storage.ts'
+import { isScriptTask, scheduleDomain } from './storage.ts'
+import type { ScheduleTask, ScriptScheduleTask } from './storage.ts'
 import { appendDelivery, deliveryHistoryPage, publicReceipt } from './delivery-history.ts'
+import { publicRun, runHistoryPage } from './run-history.ts'
+import { ScheduleActionRegistry, fallbackSource } from './actions.ts'
 import { resolveScheduleUpdate } from './update.ts'
 import {
   foldScheduleEvents, ScheduleInputError, ScheduleLogError, ScheduleId, createAfterScheduleRecord, createAtScheduleRecord,
@@ -17,14 +22,18 @@ import {
   scheduleTitle,
 } from './domain.ts'
 import type {
-  DeliveryRetentionBounds, ScheduleCatalogEntry, ScheduleCreateRequest, ScheduleDeleteRequest, ScheduleDeleteResult,
-  ScheduleDeliveryHistoryRequest, ScheduleDeliveryHistoryResult, ScheduleListRequest, ScheduleRecord,
-  ScheduleRunRequest, ScheduleRunResult, ScheduleUpdateRequest, ScheduleUpdateResult, SubagentSessionError,
+  DeliveryRetentionBounds, ScheduleActionInput, ScheduleActionSummary, ScheduleCatalogEntry, ScheduleCreateActionRequest,
+  ScheduleCreateRequest, ScheduleDeleteRequest, ScheduleDeleteResult, ScheduleDeliveryHistoryRequest,
+  ScheduleDeliveryHistoryResult, ScheduleListRequest, ScheduleRecord, ScheduleReportPolicy, ScheduleRunHistoryRequest,
+  ScheduleRunHistoryResult, ScheduleRunRequest, ScheduleRunResult, ScheduleUpdateRequest, ScheduleUpdateResult,
+  SubagentSessionError,
 } from './types.ts'
 
 export type * from './types.ts'
-export { scheduleDomain } from './storage.ts'
-export type { ScheduleTask } from './storage.ts'
+export { scheduleDomain, isScriptTask } from './storage.ts'
+export type { ScheduleTask, ScriptScheduleTask } from './storage.ts'
+export { ScheduleActionRegistry, narrowSandboxPolicy, truncateOutput } from './actions.ts'
+export type { ScheduleActionEnv, ScheduleActionProvider, ScheduleActionResult } from './actions.ts'
 export type { RecurringOccurrence } from './domain.ts'
 export {
   SCHEDULE_CHANGE_VERSION,
@@ -50,6 +59,7 @@ export {
   parseWeeklyInput,
   renderReminderFraming,
   renderRecurringReminderBatchFraming,
+  renderRunResultFraming,
   resolveEveryOccurrence,
   resolveDailyOccurrence,
   resolveWeeklyOccurrence,
@@ -80,6 +90,12 @@ export interface Config {
    * cap and the window wins, and the newest records survive.
    */
   deliveryHistoryRecords?: number
+  /** Byte budget of each script run's saved and delivered output; omission defaults to 16384. */
+  runOutputBytes?: number
+  /** Elapsed budget of a script task that states none, in milliseconds; omission defaults to 120000. */
+  actionTimeoutMs?: number
+  /** Cap of any script task's elapsed budget, in milliseconds; omission defaults to 600000. */
+  maxActionTimeoutMs?: number
 }
 
 /** Retained delivery-history window applied when the deployment states none. */
@@ -87,6 +103,39 @@ const DEFAULT_DELIVERY_HISTORY_DAYS = 30
 
 /** Retained delivery-history record cap applied when the deployment states none. */
 const DEFAULT_DELIVERY_HISTORY_RECORDS = 200
+
+/** Script-run output budget applied when the deployment states none. */
+const DEFAULT_RUN_OUTPUT_BYTES = 16_384
+
+/** Script-run elapsed budget applied when neither the task nor the deployment states one. */
+const DEFAULT_ACTION_TIMEOUT_MS = 120_000
+
+/** Script-run elapsed cap applied when the deployment states none. */
+const DEFAULT_MAX_ACTION_TIMEOUT_MS = 600_000
+
+/** Longest stored action source a summary line shows. */
+const SUMMARY_LENGTH = 120
+
+/**
+ * Validate an untrusted report policy.
+ * @param report - Value received over the tool or RPC boundary.
+ * @returns The policy, defaulting to `always`.
+ */
+function reportPolicy(report: unknown): ScheduleReportPolicy {
+  if (report === undefined) return 'always'
+  if (report === 'always' || report === 'on-failure' || report === 'never') return report
+  throw new ScheduleInputError('invalid_action', 'report must be always, on-failure, or never.')
+}
+
+/**
+ * One line of a source text for list display.
+ * @param source - Complete source.
+ * @returns First non-empty line, cut to the summary length.
+ */
+function summaryLine(source: string): string {
+  const line = source.split('\n').find(candidate => candidate.trim().length > 0)?.trim() ?? ''
+  return line.length > SUMMARY_LENGTH ? `${line.slice(0, SUMMARY_LENGTH - 1)}…` : line
+}
 
 /**
  * Shared management service; reads, deletion, and timing edits never activate a Session.
@@ -102,10 +151,20 @@ export class ScheduleService extends TypertRemoteService {
   static Config: z<Config> = z.object({
     deliveryHistoryDays: z.number().step(1).min(1).max(3650).default(DEFAULT_DELIVERY_HISTORY_DAYS),
     deliveryHistoryRecords: z.number().step(1).min(1).max(10_000).default(DEFAULT_DELIVERY_HISTORY_RECORDS),
+    runOutputBytes: z.number().step(1).min(256).max(1_048_576).default(DEFAULT_RUN_OUTPUT_BYTES),
+    actionTimeoutMs: z.number().step(1).min(1000).max(86_400_000).default(DEFAULT_ACTION_TIMEOUT_MS),
+    maxActionTimeoutMs: z.number().step(1).min(1000).max(86_400_000).default(DEFAULT_MAX_ACTION_TIMEOUT_MS),
   })
+
+  /**
+   * Script-action providers. Provider plugins register a kind here; the
+   * returned disposer belongs in the registering plugin's effect.
+   */
+  readonly actions: ScheduleActionRegistry
 
   /** Resolved retention bounds shared with the runtime that appends acknowledgments. */
   private readonly retention: DeliveryRetentionBounds
+  private readonly limits: { outputBytes: number; defaultTimeoutMs: number; maxTimeoutMs: number }
   private readonly ready: Promise<Domain<typeof scheduleDomain>>
   private readonly initialized: PromiseLike<unknown>
   private chain: Promise<unknown> = Promise.resolve()
@@ -122,6 +181,22 @@ export class ScheduleService extends TypertRemoteService {
       days: config.deliveryHistoryDays ?? DEFAULT_DELIVERY_HISTORY_DAYS,
       records: config.deliveryHistoryRecords ?? DEFAULT_DELIVERY_HISTORY_RECORDS,
     }
+    this.limits = {
+      outputBytes: config.runOutputBytes ?? DEFAULT_RUN_OUTPUT_BYTES,
+      defaultTimeoutMs: config.actionTimeoutMs ?? DEFAULT_ACTION_TIMEOUT_MS,
+      maxTimeoutMs: config.maxActionTimeoutMs ?? DEFAULT_MAX_ACTION_TIMEOUT_MS,
+    }
+    if (this.limits.defaultTimeoutMs > this.limits.maxTimeoutMs) {
+      throw new Error(`schedule: actionTimeoutMs (${this.limits.defaultTimeoutMs}) exceeds maxActionTimeoutMs (${this.limits.maxTimeoutMs})`)
+    }
+    this.actions = new ScheduleActionRegistry(() => {
+      try {
+        ctx.emit('schedule/actions-changed')
+      } catch (error: unknown) {
+        // Only the synchronous observer dispatch runs here; registration already committed.
+        ctx.logger.warn(`schedule: schedule/actions-changed listener failed: ${String(error)}`)
+      }
+    })
     this.ready = ctx.storageDomain.open(scheduleDomain).then(async (domain) => {
       for (const [key, task] of domain.table('tasks').entries()) {
         if (key !== task.record.id) {
@@ -159,8 +234,16 @@ export class ScheduleService extends TypertRemoteService {
           await tasks.put(task.record.id, task)
           this.emitChanged()
         },
-        this.retention)
-      this.runtime.requestDrive()
+        this.retention,
+        { registry: this.actions, limits: this.limits })
+      const runtime = this.runtime
+      // Provider plugins inject Schedule, so Loader settlement must not be awaited by Service.init itself.
+      void Promise.resolve(this.initialized).then(async () => {
+        await ctx.get('loader')?.await()
+        if (!this.stopping) runtime.requestDrive()
+      }).catch((error: unknown) => {
+        ctx.logger.warn(`schedule: initial dispatch could not start: ${String(error)}`)
+      })
       return cleanup
     })
     ctx.on('session/created', (session) => {
@@ -187,7 +270,9 @@ export class ScheduleService extends TypertRemoteService {
     // rows instead of letting them deliver into a closed Session.
     ctx.effect(() => {
       const activity = ctx.on('workspace/session-activity', async ({ sessionId }, next) => {
-        const active = await this.list({ sessionId })
+        const active = [...(await this.getDomain()).table('tasks').entries()]
+          .filter(([, task]) => task.sessionId === sessionId && (task.status === 'active' || task.inFlight !== undefined))
+          .map(([, task]) => task.record)
         const rest = await next()
         if (active.length === 0) return rest
         const own: SessionActivity = {
@@ -223,9 +308,13 @@ export class ScheduleService extends TypertRemoteService {
    * @param sessionId - Original Session receiving the reminder.
    * @param request - Validated tool selector, required title, and reminder content.
    * @param signal - Optional cancellation checked before persistence begins, including after FIFO waits.
+   * @param script - Script action, report policy, and trusted binding; omitted creates a prompt reminder.
    * @returns The durably stored schedule. Cancellation does not roll back an in-flight write.
    */
-  async create(sessionId: SessionId, request: ScheduleCreateRequest, signal?: AbortSignal): Promise<ScheduleRecord> {
+  async create(
+    sessionId: SessionId, request: ScheduleCreateRequest, signal?: AbortSignal, script?: ScheduleCreateActionRequest,
+  ): Promise<ScheduleRecord> {
+    const scriptMembers = script === undefined ? undefined : this.scriptMembers(script)
     if (Number(request.at !== undefined) + Number(request.after_seconds !== undefined)
       + Number(request.every_seconds !== undefined) + Number(request.daily !== undefined)
       + Number(request.weekly !== undefined) + Number(request.cron !== undefined) > 1) {
@@ -255,6 +344,7 @@ export class ScheduleService extends TypertRemoteService {
       signal?.throwIfAborted()
       await domain.table('tasks').put(id, {
         sessionId, record, status: 'active', deliveryHistory: { records: [], earlierRecordsUnavailable: false },
+        ...scriptMembers,
       })
       this.emitChanged()
       this.runtime?.requestDrive()
@@ -285,11 +375,26 @@ export class ScheduleService extends TypertRemoteService {
   async catalog(): Promise<ScheduleCatalogEntry[]> {
     const domain = await this.getDomain()
     return [...domain.table('tasks').entries()]
-      .map(([, task]) => ({
-        ...task.record, sessionId: task.sessionId, status: task.status,
-        ...(task.lastDelivery === undefined ? {} : { lastDelivery: publicReceipt(task.lastDelivery) }),
-      }))
+      .map(([, task]) => this.catalogEntry(task))
       .sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt) || a.id.localeCompare(b.id))
+  }
+
+  /**
+   * Read saved script runs without activating or reading the original Session.
+   * @param request - Session binding, task identity, explicit limit, and optional exclusive run cursor.
+   * @returns Newest-first runs, or a task/cursor lookup failure; a prompt reminder has no runs.
+   * @throws ScheduleInputError when limit is not a safe integer from 1 through 100.
+   */
+  @Remote('runs')
+  async runs(request: ScheduleRunHistoryRequest): Promise<ScheduleRunHistoryResult> {
+    if (!Number.isSafeInteger(request.limit) || request.limit < 1 || request.limit > 100) {
+      throw new ScheduleInputError('invalid_rule', 'Run history limit must be a safe integer from 1 through 100.')
+    }
+    const task = (await this.getDomain()).table('tasks').get(request.id)
+    if (task === undefined || task.sessionId !== request.sessionId) {
+      return { id: request.id, code: 'schedule_not_found' }
+    }
+    return runHistoryPage(task, request, this.retention)
   }
 
   /**
@@ -332,6 +437,8 @@ export class ScheduleService extends TypertRemoteService {
         return { id: request.id, deleted: false, code: 'schedule_not_found' }
       }
       await tasks.delete(request.id)
+      // The row is gone, so the cancelled run's outcome finds nothing to record.
+      this.runtime?.abortRun(request.id)
       this.emitChanged()
       this.runtime?.requestDrive()
       return { id: request.id, deleted: true }
@@ -364,12 +471,32 @@ export class ScheduleService extends TypertRemoteService {
         return { id: request.id, updated: false, code: 'schedule_not_found' }
       }
       if (current.status === 'inactive') return { id: request.id, updated: false, code: 'schedule_ended' }
+      if (current.inFlight !== undefined) return { id: request.id, updated: false, code: 'schedule_conflict' }
+      const scriptChange = request.action !== undefined || request.report !== undefined
+      if (scriptChange && !isScriptTask(current)) return { id: request.id, updated: false, code: 'not_script_task' }
+      let scriptPatch: Pick<ScheduleTask, 'action' | 'report'> = {}
+      if (scriptChange && isScriptTask(current)) {
+        try {
+          if (request.action !== undefined) {
+            if (request.expectedAction === undefined || !isDeepStrictEqual(request.expectedAction, this.actionIdentity(current))) {
+              return { id: request.id, updated: false, code: 'schedule_conflict' }
+            }
+            scriptPatch = { action: this.storedAction(request.action) }
+          }
+          if (request.report !== undefined) scriptPatch = { ...scriptPatch, report: reportPolicy(request.report) }
+        } catch (error: unknown) {
+          if (!(error instanceof ScheduleInputError)) throw error
+          return { code: error.code, message: error.message }
+        }
+      }
       const result = resolveScheduleUpdate(current.record, request.expected, request.change, Date.now(), request)
-      if (!('record' in result) || !result.updated) return result
-      await tasks.put(request.id, { ...current, record: result.record })
+      if (!('record' in result)) return result
+      const next: ScheduleTask = { ...current, record: result.record, ...scriptPatch }
+      if (!result.updated && isDeepStrictEqual(next, current)) return result
+      await tasks.put(request.id, next)
       this.emitChanged()
       this.runtime?.requestDrive()
-      return result
+      return { ...result, updated: true }
     })
   }
 
@@ -400,6 +527,12 @@ export class ScheduleService extends TypertRemoteService {
       const runtime = this.runtime
       /* v8 ignore next 2 -- getDomain() awaits initialization, which always constructs the runtime. */
       if (runtime === undefined) throw new Error('schedule: the runtime is not available')
+      if (isScriptTask(task)) {
+        if (task.inFlight !== undefined) return { id: request.id, ran: false, code: 'schedule_running' }
+        // The plan stays armed: a manual run keeps the committed target and status.
+        const started = await runtime.startScript(task, task.record.scheduledAt, true)
+        return { id: request.id, ran: true, runId: started.runId, startedAt: started.startedAt }
+      }
       const delivery = await runtime.deliverNow(task)
       if (!delivery.delivered) return { id: request.id, ran: false, code: 'session_unavailable' }
       await tasks.put(task.record.id, {
@@ -415,6 +548,83 @@ export class ScheduleService extends TypertRemoteService {
       this.emitChanged()
       return { id: request.id, ran: true, deliveredAt: delivery.deliveredAt }
     })
+  }
+
+  /**
+   * Validate the script part of a creation before it joins the queue.
+   * @param script - Untrusted action and report with the caller's trusted binding.
+   * @returns Stored script-task members.
+   * @throws ScheduleInputError for an unavailable kind, invalid specification, timeout, report, or binding.
+   */
+  private scriptMembers(script: ScheduleCreateActionRequest): Pick<ScheduleTask, 'action' | 'report' | 'binding'> {
+    if (!isAbsolute(script.binding.cwd)) {
+      throw new ScheduleInputError('invalid_action', 'A script task needs an absolute working directory.')
+    }
+    return {
+      action: this.storedAction(script.action),
+      report: reportPolicy(script.report),
+      binding: { cwd: script.binding.cwd, sandboxCeiling: script.binding.sandboxCeiling },
+    }
+  }
+
+  /**
+   * Validate an untrusted action through its provider.
+   * @param input - Requested kind, specification, and optional timeout.
+   * @returns The stored action.
+   * @throws ScheduleInputError for an unavailable kind, invalid specification, or out-of-range timeout.
+   */
+  private storedAction(input: ScheduleActionInput): NonNullable<ScheduleTask['action']> {
+    if (typeof input.kind !== 'string') throw new ScheduleInputError('invalid_action', 'action kind must be a string.')
+    const provider = this.actions.require(input.kind)
+    const spec = provider.decode(input.spec)
+    if (input.timeoutMs !== undefined
+      && (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs <= 0 || input.timeoutMs > this.limits.maxTimeoutMs)) {
+      throw new ScheduleInputError('invalid_action', `timeout must be a positive whole number of milliseconds up to ${this.limits.maxTimeoutMs}.`)
+    }
+    return { kind: input.kind, spec, ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }) }
+  }
+
+  /**
+   * The stored action as the update comparison sees it.
+   * @param task - Script task.
+   * @returns Kind, rendered source, and optional timeout.
+   */
+  private actionIdentity(task: ScriptScheduleTask): { kind: string; source: string; timeoutMs?: number } {
+    const provider = this.actions.get(task.action.kind)
+    return {
+      kind: task.action.kind,
+      source: provider === undefined ? fallbackSource(task.action.spec) : provider.source(task.action.spec),
+      ...(task.action.timeoutMs === undefined ? {} : { timeoutMs: task.action.timeoutMs }),
+    }
+  }
+
+  /**
+   * Project one stored row onto the browser-safe catalog entry.
+   * @param task - Stored row.
+   * @returns The entry with script members only on a script task.
+   */
+  private catalogEntry(task: ScheduleTask): ScheduleCatalogEntry {
+    const base = {
+      ...task.record, sessionId: task.sessionId, status: task.status,
+      ...(task.lastDelivery === undefined ? {} : { lastDelivery: publicReceipt(task.lastDelivery) }),
+    }
+    if (!isScriptTask(task)) return base
+    const identity = this.actionIdentity(task)
+    const action: ScheduleActionSummary = {
+      ...identity,
+      summary: summaryLine(identity.source),
+      cwd: task.binding.cwd,
+      sandboxCeiling: task.binding.sandboxCeiling,
+      available: this.actions.get(task.action.kind) !== undefined,
+    }
+    const lastRun = task.runHistory?.records.at(-1)
+    return {
+      ...base,
+      action,
+      report: task.report,
+      ...(task.inFlight === undefined ? {} : { running: { runId: task.inFlight.runId, startedAt: task.inFlight.startedAt } }),
+      ...(lastRun === undefined ? {} : { lastRun: publicRun(lastRun) }),
+    }
   }
 
   /**
@@ -475,7 +685,7 @@ export class ScheduleService extends TypertRemoteService {
     await this.serialize(async () => {
       const tasks = (await this.getDomain()).table('tasks')
       const active = [...tasks.entries()]
-        .filter(([, task]) => task.sessionId === sessionId && task.status === 'active')
+        .filter(([, task]) => task.sessionId === sessionId && (task.status === 'active' || task.inFlight !== undefined))
         .map(([, task]) => task.record.id)
       if (active.length === 0) return
       // One row per write: the domain table has no batch delete, and each row is
@@ -487,6 +697,7 @@ export class ScheduleService extends TypertRemoteService {
       for (const id of active) {
         try {
           await tasks.delete(id)
+          this.runtime?.abortRun(id)
           removed = true
         } catch (error: unknown) {
           // Every row is attempted: the archive has already landed, so a row this

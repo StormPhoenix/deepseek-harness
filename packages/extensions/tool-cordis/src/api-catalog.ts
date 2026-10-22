@@ -2015,9 +2015,14 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     description: 'Shared management service; reads, deletion, and timing edits never activate a Session.\n\n`sessionPersistence` is a load-order requirement rather than a directly called service: a delivery commits only when `ctx.sessions.flush()` reports that a `session/flush` listener participated, and the persistence backend providing this service is the plugin that registers that listener.',
     methods: [
       {
-        signature: 'async create(sessionId: SessionId, request: ScheduleCreateRequest, signal?: AbortSignal): Promise<ScheduleRecord>',
+        signature: 'readonly actions: ScheduleActionRegistry',
+        description: 'Script-action providers. Provider plugins register a kind here; the returned disposer belongs in the registering plugin\'s effect.',
+        parameters: [],
+      },
+      {
+        signature: 'async create( sessionId: SessionId, request: ScheduleCreateRequest, signal?: AbortSignal, script?: ScheduleCreateActionRequest, ): Promise<ScheduleRecord>',
         description: 'Create a reminder bound to the caller-selected Session without activating it.\n\nThe request must supply a title; a missing, blank-after-trim, or over-long title rejects with `invalid_prompt` instead of deriving one from the prompt. A Session a delegated child owns rejects with `subagent_session`, because delivery can never reach it: the child is one whose delegation depth is above zero. The record is built from the clock reading taken before the request joins the serialized queue, so a create that waits behind a longer operation keeps its request-time anchor and may already be due when the queue reaches it.',
-        parameters: [{ name: 'sessionId', description: 'Original Session receiving the reminder.' }, { name: 'request', description: 'Validated tool selector, required title, and reminder content.' }, { name: 'signal', description: 'Optional cancellation checked before persistence begins, including after FIFO waits.' }],
+        parameters: [{ name: 'sessionId', description: 'Original Session receiving the reminder.' }, { name: 'request', description: 'Validated tool selector, required title, and reminder content.' }, { name: 'signal', description: 'Optional cancellation checked before persistence begins, including after FIFO waits.' }, { name: 'script', description: 'Script action, report policy, and trusted binding; omitted creates a prompt reminder.' }],
         returns: 'The durably stored schedule. Cancellation does not roll back an in-flight write.',
       },
       {
@@ -2031,6 +2036,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Read all active and inactive Host reminders with their original Session bindings. A deleted reminder has no row, so it is absent here. Does not activate Sessions or read Session history.',
         parameters: [],
         returns: 'Reminders ordered by scheduledAt ascending, then lexicographically by id.',
+      },
+      {
+        signature: '@Remote(\'runs\') async runs(request: ScheduleRunHistoryRequest): Promise<ScheduleRunHistoryResult>',
+        description: 'Read saved script runs without activating or reading the original Session.',
+        parameters: [{ name: 'request', description: 'Session binding, task identity, explicit limit, and optional exclusive run cursor.' }],
+        returns: 'Newest-first runs, or a task/cursor lookup failure; a prompt reminder has no runs.',
+        throws: ['ScheduleInputError when limit is not a safe integer from 1 through 100.'],
       },
       {
         signature: '@Remote(\'history\') async history(request: ScheduleDeliveryHistoryRequest): Promise<ScheduleDeliveryHistoryResult>',
@@ -4420,6 +4432,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [],
   },
   {
+    name: 'schedule/actions-changed',
+    mode: 'emit',
+    signature: '\'schedule/actions-changed\'(): void',
+    summary: 'The set of mounted script-action providers changed; tool consumers refresh their action schema.',
+    description: 'The set of mounted script-action providers changed; tool consumers refresh their action schema.',
+    parameters: [],
+  },
+  {
     name: 'schedule/changed',
     mode: 'emit',
     signature: '\'schedule/changed\'(): void',
@@ -4704,6 +4724,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface AccountWallet {\n    readonly currency: \'CNY\' | \'USD\';\n    readonly balance: string;\n}',
   },
   {
+    name: 'ActionUnavailableError',
+    declaration: 'export interface ActionUnavailableError {\n    readonly code: \'action_unavailable\';\n    readonly message: string;\n}',
+  },
+  {
     name: 'AdapterRegistrationHandle',
     declaration: 'export interface AdapterRegistrationHandle {\n    (): void;\n    replace(providers: string[]): void;\n}',
   },
@@ -4818,6 +4842,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ArchiveSessionOptions',
     declaration: 'export interface ArchiveSessionOptions {\n    readonly stopActivity?: boolean;\n}',
+  },
+  {
+    name: 'ArrayValueSchemaSpec',
+    declaration: 'export interface ArrayValueSchemaSpec extends ValueSchemaAnnotations {\n    type: \'array\';\n    items?: ValueSchemaSpec;\n}',
   },
   {
     name: 'AskOptions',
@@ -4966,6 +4994,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'BashEnvVariableInfo',
     declaration: 'export interface BashEnvVariableInfo extends BashEnvVariable {\n    contributor: string;\n    key: DshEnvironmentKey;\n}',
+  },
+  {
+    name: 'BooleanValueSchemaSpec',
+    declaration: 'export interface BooleanValueSchemaSpec extends ValueSchemaAnnotations {\n    type: \'boolean\';\n    enum?: readonly boolean[];\n    const?: boolean;\n}',
   },
   {
     name: 'BoxProps',
@@ -5724,8 +5756,16 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type InstallSpecKind = \'registry\' | \'path\' | \'git\' | \'tarball\';',
   },
   {
+    name: 'IntegerValueSchemaSpec',
+    declaration: 'export interface IntegerValueSchemaSpec extends ValueSchemaAnnotations {\n    type: \'integer\';\n    enum?: readonly number[];\n    const?: number;\n}',
+  },
+  {
     name: 'InternalScheduleError',
     declaration: 'export interface InternalScheduleError {\n    readonly code: \'internal_error\';\n    readonly message: string;\n}',
+  },
+  {
+    name: 'InvalidActionError',
+    declaration: 'export interface InvalidActionError {\n    readonly code: \'invalid_action\';\n    readonly message: string;\n}',
   },
   {
     name: 'InvalidPromptError',
@@ -5886,6 +5926,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'JsonValue',
     declaration: 'export type JsonValue = null | boolean | number | string | JsonValue[] | {\n    [key: string]: JsonValue;\n};',
+  },
+  {
+    name: 'JsonValueSchemaSpec',
+    declaration: 'export interface JsonValueSchemaSpec extends ValueSchemaAnnotations {\n    type: \'json\';\n}',
   },
   {
     name: 'KvFacet',
@@ -6292,8 +6336,20 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface NotFutureError {\n    readonly code: \'not_future\';\n    readonly message: string;\n}',
   },
   {
+    name: 'NullValueSchemaSpec',
+    declaration: 'export interface NullValueSchemaSpec extends ValueSchemaAnnotations {\n    type: \'null\';\n    enum?: readonly null[];\n    const?: null;\n}',
+  },
+  {
+    name: 'NumberValueSchemaSpec',
+    declaration: 'export interface NumberValueSchemaSpec extends ValueSchemaAnnotations {\n    type: \'number\';\n    enum?: readonly number[];\n    const?: number;\n}',
+  },
+  {
     name: 'ObjectJsonSchema',
     declaration: 'export type ObjectJsonSchema = JsonSchemaNode & {\n    type: \'object\';\n};',
+  },
+  {
+    name: 'ObjectValueSchemaSpec',
+    declaration: 'export interface ObjectValueSchemaSpec extends ValueSchemaAnnotations {\n    type: \'object\';\n    properties?: ParameterSchemaSpec;\n    additionalProperties: boolean;\n}',
   },
   {
     name: 'OfficeExtension',
@@ -6326,6 +6382,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'OnboardingPage',
     declaration: 'export type OnboardingPage = \'onboarding_welcome\' | \'onboarding_recharge\' | \'onboarding_use_case\' | \'onboarding_process\';',
+  },
+  {
+    name: 'OneOfValueSchemaSpec',
+    declaration: 'export interface OneOfValueSchemaSpec extends ValueSchemaAnnotations {\n    oneOf: readonly [\n        ValueSchemaSpec,\n        ValueSchemaSpec,\n        ...ValueSchemaSpec[]\n    ];\n}',
   },
   {
     name: 'OneShotScheduleRecord',
@@ -6362,6 +6422,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'PaneOpenResult',
     declaration: 'export interface PaneOpenResult {\n    id: string;\n    isPlaced: boolean;\n    reason?: string;\n}',
+  },
+  {
+    name: 'ParameterPropertySpec',
+    declaration: 'export type ParameterPropertySpec = ValueSchemaSpec & {\n    required?: true;\n};',
+  },
+  {
+    name: 'ParameterSchemaSpec',
+    declaration: 'export type ParameterSchemaSpec = {\n    [key: string]: ParameterPropertySpec;\n    [key: symbol]: never;\n};',
   },
   {
     name: 'PeerAdmission',
@@ -6876,8 +6944,40 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SaveTextSpill {\n    owner: SpillOwner;\n    source: SpillSource;\n    suggestedName: string;\n    content: string;\n}',
   },
   {
+    name: 'ScheduleActionBinding',
+    declaration: 'export interface ScheduleActionBinding {\n    readonly cwd: string;\n    readonly sandboxCeiling: \'read-only\' | \'workspace-write\' | \'danger-full-access\';\n}',
+  },
+  {
+    name: 'ScheduleActionEnv',
+    declaration: 'export interface ScheduleActionEnv {\n    readonly sandboxPolicy: SandboxExecutionPolicy;\n    readonly cwd: string;\n    readonly timeoutMs: number;\n    readonly signal: AbortSignal;\n}',
+  },
+  {
+    name: 'ScheduleActionInput',
+    declaration: 'export interface ScheduleActionInput {\n    readonly kind: string;\n    readonly spec: JsonValue;\n    readonly timeoutMs?: number;\n}',
+  },
+  {
+    name: 'ScheduleActionProvider',
+    declaration: 'export interface ScheduleActionProvider {\n    readonly kind: string;\n    readonly description: string;\n    readonly specSchema: ValueSchemaSpec;\n    decode(spec: unknown): JsonValue;\n    source(spec: JsonValue): string;\n    run(spec: JsonValue, env: ScheduleActionEnv): Promise<ScheduleActionResult>;\n}',
+  },
+  {
+    name: 'ScheduleActionRegistry',
+    declaration: 'export class ScheduleActionRegistry {\n    constructor(private readonly onChange: () => void);\n    register(provider: ScheduleActionProvider): () => void;\n    get(kind: string): ScheduleActionProvider | undefined;\n    list(): ScheduleActionProvider[];\n    require(kind: string): ScheduleActionProvider;\n}',
+  },
+  {
+    name: 'ScheduleActionResult',
+    declaration: 'export interface ScheduleActionResult {\n    readonly outcome: \'succeeded\' | \'failed\' | \'timeout\' | \'aborted\' | \'sandbox-denied\' | \'unavailable\';\n    readonly exitCode?: number | null;\n    readonly output: string;\n    readonly outputTruncated?: boolean;\n}',
+  },
+  {
+    name: 'ScheduleActionSummary',
+    declaration: 'export interface ScheduleActionSummary {\n    readonly kind: string;\n    readonly summary: string;\n    readonly source: string;\n    readonly timeoutMs?: number;\n    readonly cwd: string;\n    readonly sandboxCeiling: \'read-only\' | \'workspace-write\' | \'danger-full-access\';\n    readonly available: boolean;\n}',
+  },
+  {
     name: 'ScheduleCatalogEntry',
-    declaration: 'export type ScheduleCatalogEntry = ScheduleRecord & {\n    readonly sessionId: SessionId;\n    readonly status: \'active\' | \'inactive\';\n    readonly lastDelivery?: ScheduleDeliveryReceipt;\n};',
+    declaration: 'export type ScheduleCatalogEntry = ScheduleRecord & {\n    readonly sessionId: SessionId;\n    readonly status: \'active\' | \'inactive\';\n    readonly lastDelivery?: ScheduleDeliveryReceipt;\n    readonly action?: ScheduleActionSummary;\n    readonly report?: ScheduleReportPolicy;\n    readonly running?: {\n        readonly runId: string;\n        readonly startedAt: string;\n    };\n    readonly lastRun?: ScheduleRunRecord;\n};',
+  },
+  {
+    name: 'ScheduleCreateActionRequest',
+    declaration: 'export interface ScheduleCreateActionRequest {\n    readonly action: ScheduleActionInput;\n    readonly report?: ScheduleReportPolicy;\n    readonly binding: ScheduleActionBinding;\n}',
   },
   {
     name: 'ScheduleCreateRequest',
@@ -6928,12 +7028,32 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type ScheduleRecord = OneShotScheduleRecord | RecurringScheduleRecord;',
   },
   {
+    name: 'ScheduleReportPolicy',
+    declaration: 'export type ScheduleReportPolicy = \'always\' | \'on-failure\' | \'never\';',
+  },
+  {
+    name: 'ScheduleRunHistoryRequest',
+    declaration: 'export interface ScheduleRunHistoryRequest extends ScheduleDeleteRequest {\n    limit: number;\n    before?: string;\n}',
+  },
+  {
+    name: 'ScheduleRunHistoryResult',
+    declaration: 'export type ScheduleRunHistoryResult = {\n    readonly id: ScheduleId;\n    readonly records: ScheduleRunRecord[];\n    readonly earlierRecordsPruned: boolean;\n    readonly retention: DeliveryRetentionBounds;\n    readonly nextBefore?: string;\n} | {\n    readonly id: ScheduleId;\n    readonly code: \'schedule_not_found\' | \'run_cursor_not_found\';\n};',
+  },
+  {
+    name: 'ScheduleRunOutcome',
+    declaration: 'export type ScheduleRunOutcome = \'succeeded\' | \'failed\' | \'timeout\' | \'aborted\' | \'sandbox-denied\' | \'skipped\' | \'interrupted\' | \'unavailable\';',
+  },
+  {
+    name: 'ScheduleRunRecord',
+    declaration: 'export interface ScheduleRunRecord {\n    readonly runId: string;\n    readonly scheduledAt: string;\n    readonly startedAt: string;\n    readonly finishedAt: string;\n    readonly manual?: true;\n    readonly outcome: ScheduleRunOutcome;\n    readonly exitCode?: number | null;\n    readonly output: string;\n    readonly outputTruncated: boolean;\n    readonly messageId?: MessageId;\n}',
+  },
+  {
     name: 'ScheduleRunRequest',
     declaration: 'export interface ScheduleRunRequest extends ScheduleListRequest {\n    readonly id: ScheduleId;\n}',
   },
   {
     name: 'ScheduleRunResult',
-    declaration: 'export type ScheduleRunResult = {\n    readonly id: ScheduleId;\n    readonly ran: true;\n    readonly deliveredAt: string;\n} | {\n    readonly id: ScheduleId;\n    readonly ran: false;\n    readonly code: \'schedule_not_found\' | \'schedule_ended\' | \'session_unavailable\';\n} | SubagentSessionError;',
+    declaration: 'export type ScheduleRunResult = {\n    readonly id: ScheduleId;\n    readonly ran: true;\n    readonly deliveredAt: string;\n} | {\n    readonly id: ScheduleId;\n    readonly ran: true;\n    readonly runId: string;\n    readonly startedAt: string;\n} | {\n    readonly id: ScheduleId;\n    readonly ran: false;\n    readonly code: \'schedule_not_found\' | \'schedule_ended\' | \'session_unavailable\' | \'schedule_running\';\n} | SubagentSessionError;',
   },
   {
     name: 'ScheduleTimingChange',
@@ -6941,7 +7061,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ScheduleToolError',
-    declaration: 'export type ScheduleToolError = InvalidPromptError | InvalidSelectorError | InvalidRuleError | InvalidTimeZoneError | NotFutureError | TimeOutOfRangeError | FrequencyTooHighError | SubagentSessionError | InternalScheduleError;',
+    declaration: 'export type ScheduleToolError = InvalidPromptError | InvalidSelectorError | InvalidRuleError | InvalidTimeZoneError | NotFutureError | TimeOutOfRangeError | FrequencyTooHighError | SubagentSessionError | InvalidActionError | ActionUnavailableError | InternalScheduleError;',
   },
   {
     name: 'ScheduleUpdateContent',
@@ -6949,11 +7069,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ScheduleUpdateMiss',
-    declaration: 'export interface ScheduleUpdateMiss {\n    readonly id: ScheduleId;\n    readonly updated: false;\n    readonly code: \'schedule_not_found\' | \'schedule_ended\' | \'schedule_conflict\';\n}',
+    declaration: 'export interface ScheduleUpdateMiss {\n    readonly id: ScheduleId;\n    readonly updated: false;\n    readonly code: \'schedule_not_found\' | \'schedule_ended\' | \'schedule_conflict\' | \'not_script_task\';\n}',
   },
   {
     name: 'ScheduleUpdateRequest',
-    declaration: 'export interface ScheduleUpdateRequest extends ScheduleDeleteRequest, ScheduleUpdateContent {\n    readonly expected: ScheduleRecord;\n    readonly change?: ScheduleTimingChange;\n}',
+    declaration: 'export interface ScheduleUpdateRequest extends ScheduleDeleteRequest, ScheduleUpdateContent {\n    readonly expected: ScheduleRecord;\n    readonly change?: ScheduleTimingChange;\n    readonly action?: ScheduleActionInput;\n    readonly expectedAction?: {\n        readonly kind: string;\n        readonly source: string;\n        readonly timeoutMs?: number;\n    };\n    readonly report?: ScheduleReportPolicy;\n}',
   },
   {
     name: 'ScheduleUpdateResult',
@@ -7832,6 +7952,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type StreamChunk = {\n    type: \'block-start\';\n    index: number;\n    blockType: ContentBlockType;\n} | {\n    type: \'text-delta\';\n    index: number;\n    text: string;\n} | {\n    type: \'reasoning-delta\';\n    index: number;\n    text: string;\n} | {\n    type: \'tool-call-delta\';\n    index: number;\n    id: ToolCallId;\n    name?: string;\n    argumentsDelta: string;\n} | {\n    type: \'block-end\';\n    index: number;\n    block: ContentBlock;\n} | {\n    type: \'usage\';\n    usage: TokenUsage;\n} | {\n    type: \'finish\';\n    reason: FinishReason;\n    replayState?: ReplayEnvelope;\n};',
   },
   {
+    name: 'StringValueSchemaSpec',
+    declaration: 'export interface StringValueSchemaSpec extends ValueSchemaAnnotations {\n    type: \'string\';\n    enum?: readonly string[];\n    const?: string;\n}',
+  },
+  {
     name: 'SubagentActivation',
     declaration: 'export interface SubagentActivation {\n    readonly childId: SessionId;\n    readonly messageId?: MessageId;\n    readonly result: Promise<SubagentResult>;\n    dispose(): Promise<void>;\n}',
   },
@@ -8562,6 +8686,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'UserMessage',
     declaration: 'export interface UserMessage extends MessageBase {\n    readonly role: \'user\';\n}',
+  },
+  {
+    name: 'ValueSchemaAnnotations',
+    declaration: 'export interface ValueSchemaAnnotations {\n    description?: string;\n    title?: string;\n    default?: JsonValue;\n    examples?: JsonValue;\n}',
+  },
+  {
+    name: 'ValueSchemaSpec',
+    declaration: 'export type ValueSchemaSpec = StringValueSchemaSpec | NumberValueSchemaSpec | IntegerValueSchemaSpec | BooleanValueSchemaSpec | NullValueSchemaSpec | ArrayValueSchemaSpec | ObjectValueSchemaSpec | JsonValueSchemaSpec | OneOfValueSchemaSpec;',
   },
   {
     name: 'VerifiedWebhookDelivery',

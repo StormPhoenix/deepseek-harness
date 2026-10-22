@@ -398,7 +398,7 @@
     },
     {
       "name": "schedule_create",
-      "description": "Create a reminder in the current session that delivers prompt when it becomes due. Supply exactly one timing parameter: after_seconds, at, every_seconds, daily, weekly, or cron. Local times that do not exist in the zone are skipped; repeated local times fire once, at the earlier instant. After downtime, a recurring reminder delivers only its latest missed occurrence. Delivery can repeat after a crash.",
+      "description": "Create a reminder in the current session that delivers prompt when it becomes due. Supply exactly one timing parameter: after_seconds, at, every_seconds, daily, weekly, or cron. Local times that do not exist in the zone are skipped; repeated local times fire once, at the earlier instant. After downtime, a recurring reminder delivers only its latest missed occurrence. Delivery can repeat after a crash. Optional actions execute saved code directly without calling a model. Creation or code replacement requires danger-full-access or approval for this call. Runs remain under the saved Session sandbox ceiling. Crashed runs are not repeated; report output is saved and may be sent to the model.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -510,6 +510,83 @@
               }
             ],
             "description": "Absolute target: an RFC 3339 date-time with offset, or a local date, time, and IANA time_zone."
+          },
+          "action": {
+            "oneOf": [
+              {
+                "type": "object",
+                "description": "Run a shell command in the saved working directory under the Session sandbox policy. No model is called.",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "command"
+                  },
+                  "spec": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "command": {
+                        "type": "string",
+                        "description": "Shell command to execute."
+                      }
+                    },
+                    "required": [
+                      "command"
+                    ]
+                  },
+                  "timeout_seconds": {
+                    "type": "integer",
+                    "description": "Optional positive elapsed deadline in whole seconds."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "spec"
+                ]
+              },
+              {
+                "type": "object",
+                "description": "The program is the body of an async TypeScript function; only erasable syntax is accepted, with no enum or namespaces. Type annotations are advisory. Top-level await and return are supported. Emit output with console.log(...) or return a lossless JSON value. Only printed values and the returned value become program output. Each call runs in a fresh Node process. Node APIs are available through await import(...). Relative paths use the supplied working directory; process.env starts empty. Direct filesystem access follows this execution's sandbox policy. No host functions, tools, or callLLM are provided.",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "program"
+                  },
+                  "spec": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "source": {
+                        "type": "string",
+                        "description": "Program source to execute."
+                      }
+                    },
+                    "required": [
+                      "source"
+                    ]
+                  },
+                  "timeout_seconds": {
+                    "type": "integer",
+                    "description": "Optional positive elapsed deadline in whole seconds."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "spec"
+                ]
+              }
+            ]
+          },
+          "report": {
+            "type": "string",
+            "description": "Script result reporting: always (default), only on failure, or never. Reported output enters the Session log and is sent to the model.",
+            "enum": [
+              "always",
+              "on-failure",
+              "never"
+            ]
           }
         },
         "required": [
@@ -544,7 +621,7 @@
     },
     {
       "name": "schedule_update",
-      "description": "Change a reminder in place, keeping its id. Supply a new title, prompt, or at most one timing parameter; omitted fields keep their stored values. To change a relative delay, create a new reminder.",
+      "description": "Change a reminder in place, keeping its id. Supply a new title, prompt, or at most one timing parameter; omitted fields keep their stored values. To change a relative delay, create a new reminder. Optional actions execute saved code directly without calling a model. Creation or code replacement requires danger-full-access or approval for this call. Runs remain under the saved Session sandbox ceiling. Crashed runs are not repeated; report output is saved and may be sent to the model.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -656,6 +733,83 @@
               }
             ],
             "description": "Absolute target: an RFC 3339 date-time with offset, or a local date, time, and IANA time_zone."
+          },
+          "action": {
+            "oneOf": [
+              {
+                "type": "object",
+                "description": "Run a shell command in the saved working directory under the Session sandbox policy. No model is called.",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "command"
+                  },
+                  "spec": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "command": {
+                        "type": "string",
+                        "description": "Shell command to execute."
+                      }
+                    },
+                    "required": [
+                      "command"
+                    ]
+                  },
+                  "timeout_seconds": {
+                    "type": "integer",
+                    "description": "Optional positive elapsed deadline in whole seconds."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "spec"
+                ]
+              },
+              {
+                "type": "object",
+                "description": "The program is the body of an async TypeScript function; only erasable syntax is accepted, with no enum or namespaces. Type annotations are advisory. Top-level await and return are supported. Emit output with console.log(...) or return a lossless JSON value. Only printed values and the returned value become program output. Each call runs in a fresh Node process. Node APIs are available through await import(...). Relative paths use the supplied working directory; process.env starts empty. Direct filesystem access follows this execution's sandbox policy. No host functions, tools, or callLLM are provided.",
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "program"
+                  },
+                  "spec": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "source": {
+                        "type": "string",
+                        "description": "Program source to execute."
+                      }
+                    },
+                    "required": [
+                      "source"
+                    ]
+                  },
+                  "timeout_seconds": {
+                    "type": "integer",
+                    "description": "Optional positive elapsed deadline in whole seconds."
+                  }
+                },
+                "required": [
+                  "kind",
+                  "spec"
+                ]
+              }
+            ]
+          },
+          "report": {
+            "type": "string",
+            "description": "Script result reporting: always (default), only on failure, or never. Reported output enters the Session log and is sent to the model.",
+            "enum": [
+              "always",
+              "on-failure",
+              "never"
+            ]
           }
         },
         "required": [

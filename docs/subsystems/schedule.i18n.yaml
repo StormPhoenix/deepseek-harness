@@ -35,9 +35,18 @@
 /host-wide-schedule/saved-delivery-records:
   en: 077aa6573d9ede1a
   zh: 0acea592a6e3630a
-/host-wide-schedule/host-delivery:
-  en: b6d522d24b9b97ba
-  zh: 84df8ea09bedf51c
+/host-wide-schedule/prompt-reminder-delivery:
+  en: 3a550026bb0d1548
+  zh: d040ddeeff3bc6d9
 /host-wide-schedule/immediate-runs:
-  en: 32d28593a63cc505
-  zh: 5e219c2a4cc950db
+  en: 56a626ca9b663815
+  zh: c6b71879bef630a3
+/host-wide-schedule/script-task-contracts:
+  en: 7138e55ff8df0b22
+  zh: f59747a69e054891
+/host-wide-schedule/execution-records:
+  en: aa082668756627e4
+  zh: 8c49a730b94b00bb
+/host-wide-schedule/action-provider-contract:
+  en: 0b22d13c9a1b22b0
+  zh: a62b2b047b953612

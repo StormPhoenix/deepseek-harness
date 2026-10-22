@@ -28,6 +28,8 @@ kind: "package-group"
 |---|---|
 | [`schedule/`](schedule/README.zh.md) | Host 拥有的提醒持久化、调度、查询与显式删除 |
 | [`tool-schedule/`](tool-schedule/README.zh.md) | 基于宿主 `ctx.schedule` 服务的 preset 级 `schedule_create`、`schedule_list`、`schedule_update` 和 `schedule_delete` 工具 |
+| [`schedule-action-command/`](schedule-action-command/README.zh.md) | 按绑定 Session 策略执行定时 shell 命令 |
+| [`schedule-action-program/`](schedule-action-program/README.zh.md) | 执行隔离程序，不提供模型或工具绑定 |
 
 -----
 

@@ -182,6 +182,9 @@ describe('timingError', () => {
     ['invalid_selector', 'timing.invalid'],
     ['invalid_rule', 'timing.invalid'],
     ['time_out_of_range', 'timing.invalid'],
+    ['not_script_task', 'timing.error'],
+    ['invalid_action', 'timing.error'],
+    ['action_unavailable', 'timing.error'],
     ['internal_error', 'timing.error'],
   ] as const)('maps the Host %s failure to %s', (code, key) => {
     expect(timingError(code)).toBe(key)

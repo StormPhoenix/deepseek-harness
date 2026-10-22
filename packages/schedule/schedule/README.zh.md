@@ -54,6 +54,15 @@ cron 输入携带 `expression` 和 `time_zone`。表达式是标准五字段 Vix
 
 每次更新都是与创建、删除共用同一 FIFO 的完整记录 compare-and-set，并保留任务 id、原会话绑定、状态、最近一次回执和全部已保存历史。任务不存在或绑定不符返回 `schedule_not_found`；未运行任务返回 `schedule_ended`。若投递、目标推进或其他编辑改变了预期记录，更新返回 `schedule_conflict`，不覆盖该记录。名称、指令和时间校验错误保留各自的错误码；存储失败会拒绝，而非报告持久化成功。冲突后应刷新目录并重新捕获预期记录，再尝试修改。分阶段表单的保存和取消行为见[任务页面](../../client/ui-schedule/README.zh.md)。
 
+<a id="script-actions"></a>
+### 脚本动作
+
+`ctx.schedule.actions.register(provider)` 注册动作种类并返回注销函数。提供方负责规格校验、源码展示和执行；Schedule 负责时间、存储、取消和回报。随附的[命令](../schedule-action-command/README.zh.md)和[程序](../schedule-action-program/README.zh.md)提供方复用 shell 与 PTC 运行时。程序动作不提供模型或工具绑定。创建时在时间记录之外单独传入可选脚本部分，包含可信调用方保存的目录与沙箱上限。模型消费者必须在调用服务前授权创建和代码替换。
+
+脚本任务先持久化推进后的计划与运行中标记，再在管理队列之外执行。只补最近一次错过的发生；上次仍在运行时，新发生记为跳过。修改运行中任务返回 `schedule_conflict`，防止旧执行继承新回报策略或提示。恢复的运行中记录记为执行中断，不重跑。一次性计划结束后，活动执行仍参与 Session 归档准入。删除会取消执行；重复失败不会自动结束循环计划。
+
+`runs({sessionId, id, limit, before?})` 通过不含自身的运行 id 游标分页读取执行记录。保留天数和条数与提醒投递记录共用。`runOutputBytes` 默认 16384，`actionTimeoutMs` 默认 120000，`maxActionTimeoutMs` 默认 600000。截止包含恢复 Session 的时间；取消会停止等待无响应的解析器，迟到结果不会启动代码。`report` 默认 `always`，`on-failure` 仅回报未成功的运行，`never` 只保存记录。回报失败仍保存不含消息 id 的执行记录。手动脚本运行返回接纳信息（`runId`、`startedAt`），不是完成；提醒任务保持投递确认响应。
+
 <a id="understand-the-implementation"></a>
 ## 理解实现
 

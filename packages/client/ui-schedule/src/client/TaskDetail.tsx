@@ -21,6 +21,7 @@ import { IconCalendarOutlineRegular } from './CalendarIcon.tsx'
 import { ClockPicker } from './ClockPicker.tsx'
 import { DatePicker } from './DatePicker.tsx'
 import { DeliveryHistory, type DeliveryHistoryInjected } from './DeliveryHistory.tsx'
+import { RunHistory, type RunHistoryInjected } from './RunHistory.tsx'
 import type { CatalogDeleteOutcome, CatalogSnapshot } from './catalog-source.ts'
 import { draftZone, secondPrecision, slashDate, timingDraft, timingError, timingSnapshot, zonedWallClock } from './task-timing.ts'
 import type { TaskTimingInjected, TimingDraft } from './task-timing.ts'
@@ -94,7 +95,7 @@ const LOCAL_FAILURES: ReadonlySet<TaskManagerKey> = new Set<TaskManagerKey>([
 ])
 
 /** Why an immediate run delivered nothing, as this detail states it. */
-export type ScheduleRunFailure = 'notFound' | 'ended' | 'subagent' | 'session' | 'unknown'
+export type ScheduleRunFailure = 'notFound' | 'ended' | 'subagent' | 'session' | 'running' | 'unknown'
 
 /** One immediate run's settled outcome: the reminder reached its Session, or the stable refusal. */
 export type ScheduleRunOutcome =
@@ -105,6 +106,7 @@ export type ScheduleRunOutcome =
 const RUN_FAILURE_KEYS: Record<ScheduleRunFailure, TaskManagerKey> = {
   notFound: 'run.error.notFound',
   ended: 'run.error.ended',
+  running: 'run.error.running',
   subagent: 'run.error.subagent',
   session: 'run.error.session',
   unknown: 'run.error.unknown',
@@ -174,7 +176,7 @@ const sessionLinkMessages = {
  * Deletion, name/instruction/timing updates, saved-history, and original-Session
  * actions one task's detail calls.
  */
-export interface TaskDetailInjected extends DeliveryHistoryInjected, TaskTimingInjected {
+export interface TaskDetailInjected extends DeliveryHistoryInjected, RunHistoryInjected, TaskTimingInjected {
   /**
    * Delete one retained task through its original Session binding.
    * @param id - Task shown in this detail.
@@ -314,7 +316,7 @@ export function useTaskDetail(
  * @returns the detail region, its deletion confirmation dialog, and the linked Session entry.
  */
 export function TaskDetail({
-  task, authoritative, id, status, deleting, onDelete, onRetry, onUpdateTiming, loadHistory, onOpenSession, onRun,
+  task, authoritative, id, status, deleting, onDelete, onRetry, onUpdateTiming, loadHistory, loadRuns, onOpenSession, onRun,
   onEditState, tab, onTabChange, confirmId, onConfirm, onDeleted, onClose, withinSession, useSessions, useWorkspaces, t,
 }: TaskDetailProps): ReactNode {
   const sessions = useSessions(snapshot => snapshot)
@@ -540,7 +542,7 @@ export function TaskDetail({
   const nextRun = nextRunParts(task.scheduledAt, t('time.locale'), now, t)
   // A run sends the stored rule, so an unsaved draft, a save in flight, an ended
   // task, and a catalog row the last read no longer holds all withhold it.
-  const runBlocked = busy || pending || !authoritative || task.status === 'inactive' || runPending || dirty
+  const runBlocked = busy || pending || !authoritative || task.status === 'inactive' || runPending || dirty || task.running !== undefined
   const runHint = runPending
     ? t('run.pending')
     : task.status === 'inactive'
@@ -750,7 +752,7 @@ export function TaskDetail({
     if (!mounted.current || identityRef.current !== submitted) return
     setRunPending(false)
     setRunOutcome(outcome.ran
-      ? { key: 'run.done', failed: false }
+      ? { key: task.action === undefined ? 'run.done' : 'run.started', failed: false }
       : { key: RUN_FAILURE_KEYS[outcome.code], failed: true })
   }
 
@@ -926,6 +928,17 @@ export function TaskDetail({
         <div role="tabpanel" id={`${id}-rule-panel`} aria-labelledby={`${id}-rule-tab`}
           hidden={tab !== 'rule' || deleted} tabIndex={0}>
           {!deleted && <>
+            {task.action !== undefined && <section className={css.scriptAction} aria-label={t('action.label')}>
+              <h3>{task.action.kind === 'command' ? t('action.command') : task.action.kind === 'program' ? t('action.program') : task.action.kind}</h3>
+              {task.running !== undefined && <p role="status">{t('runs.running')}</p>}
+              {!task.action.available && <p role="alert">{t('action.unavailable')}</p>}
+              <pre className={css.scriptSource}>{task.action.source}</pre>
+              <p>{t('action.cwd')}: <code>{task.action.cwd}</code></p>
+              <p>{t('action.sandbox')}: <code>{task.action.sandboxCeiling}</code></p>
+              <p>{t('action.report')}: {t(task.report === 'never' ? 'action.report.never'
+                : task.report === 'on-failure' ? 'action.report.failure' : 'action.report.always')}</p>
+              <p className={css.metadata}>{t('action.readonly')}</p>
+            </section>}
             {task.status === 'inactive'
               ? <p className={css.readonlyPrompt}>{shown.prompt}</p>
               : <textarea
@@ -955,15 +968,18 @@ export function TaskDetail({
           {/* Deletion removed the saved records with the task, so a deleted
               task mounts no history in the frame before `onDeleted` closes
               this detail: no read is attempted against the removed row. */}
-          {tab === 'records' && !deleted && <DeliveryHistory
-            key={JSON.stringify([task.sessionId, task.id])}
-            id={task.id}
-            sessionId={task.sessionId}
-            latestMessageId={task.lastDelivery?.messageId}
-            timeZone={recordTimeZone(task)}
-            loadHistory={loadHistory}
-            t={t}
-          />}
+          {tab === 'records' && !deleted && (task.action !== undefined
+            ? <RunHistory key={JSON.stringify([task.sessionId, task.id])}
+              id={task.id} sessionId={task.sessionId} latestRunId={task.lastRun?.runId} loadRuns={loadRuns} t={t} />
+            : <DeliveryHistory
+              key={JSON.stringify([task.sessionId, task.id])}
+              id={task.id}
+              sessionId={task.sessionId}
+              latestMessageId={task.lastDelivery?.messageId}
+              timeZone={recordTimeZone(task)}
+              loadHistory={loadHistory}
+              t={t}
+            />)}
         </div>
       </div>
       {/* A notice about the original Session states its own line under the strip:

@@ -49,6 +49,16 @@
     },
     {
       "path": "../../workspace/workspace"
-    }
+    },
+    {
+      "path": "../../sandbox/sandbox"
+    },
+    {
+      "path": "../../sandbox/sandbox-policy"
+    },
+    {
+      "path": "../../util/values"
+    },
+    { "path": "../../util/timeout" }
   ]
 }

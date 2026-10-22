@@ -68,6 +68,14 @@ Saved records are pruned when an acknowledgment is appended: the Host keeps the 
 
 Pause and a new Session for each run are not supported. Name, instruction, and run-time editing is available to the model through `schedule_update`, which changes the reminder in place and keeps its id and saved delivery records, and to the Automation tasks page against the selected task's binding; neither is a cross-Session relay workflow. Reminders recorded only in an older Session log are not scheduled automatically; recreate the ones you still need. Previously deleted task records are not reconstructed.
 
+## Scheduled commands and programs
+
+Ask the model to create a `command` or `program` task. The task stays bound to the current conversation and uses the same timing selectors as reminders. Commands execute through the configured shell; programs run in the configured program runtime without tool bindings or `callLLM`. Creating or replacing code requires approval unless the conversation already uses `danger-full-access`. This approval does not widen execution permissions: runs use the stricter of the current conversation policy and the policy saved at creation.
+
+`report` controls result delivery: `always` (default) reports every run to the conversation, `on-failure` reports unsuccessful runs, and `never` only saves execution records. Reported results enter the conversation log and can trigger a model reply; captured output may contain sensitive information. View the source, working directory, policy ceiling, and execution records on the Automation tasks page. Source editing remains in the conversation.
+
+A script task never runs concurrently with itself; a new occurrence while its previous run is active is skipped. Repeated failures do not disable recurring tasks. Host downtime still catches up the latest missed occurrence, but a run already marked in flight before a crash is recorded as interrupted and is not repeated. Deleting a task cancels its active run. The Host must remain running; closing the browser does not stop it, whereas stopping the Host does.
+
 <a id="further-exploration"></a>
 ## Further Exploration
 

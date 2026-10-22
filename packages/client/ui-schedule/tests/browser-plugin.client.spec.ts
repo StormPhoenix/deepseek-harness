@@ -401,9 +401,13 @@ describe('ui-schedule browser half', () => {
       earlierRecordsPruned: false, retention: { days: 30, records: 200 },
     } }
     const history = vi.fn().mockResolvedValue(historyResult)
+    const runsResult = { ok: true, value: {
+      id: record.id, records: [], earlierRecordsPruned: false, retention: { days: 30, records: 200 },
+    } }
+    const runs = vi.fn().mockResolvedValue(runsResult)
     const remove = vi.fn().mockResolvedValue({ ok: true, value: { id: record.id, deleted: true } })
     let onChanged: (() => void) | undefined
-    const ctx = await baseContext({ schedule: { catalog, history, delete: remove }, $on: (_event, listener) => {
+    const ctx = await baseContext({ schedule: { catalog, history, runs, delete: remove }, $on: (_event, listener) => {
       onChanged = listener
       return () => { onChanged = undefined }
     } })
@@ -439,6 +443,8 @@ describe('ui-schedule browser half', () => {
       const request = { id: record.id, sessionId: record.sessionId, limit: 20 }
       expect(await face.loadHistory(request)).toBe(historyResult)
       expect(history).toHaveBeenCalledExactlyOnceWith(request)
+      expect(await face.loadRuns(request)).toBe(runsResult)
+      expect(runs).toHaveBeenCalledExactlyOnceWith(request)
       expect(openSession).not.toHaveBeenCalled()
       face.onOpenSession(record.sessionId)
       expect(openSession).toHaveBeenCalledWith(record.sessionId)

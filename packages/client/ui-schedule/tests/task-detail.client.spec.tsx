@@ -78,6 +78,41 @@ const movedToDaily: ScheduleCatalogEntry = {
   scheduledAt: every.scheduledAt,
 }
 
+describe('script task detail', () => {
+  it.each(['command', 'program', 'custom'] as const)('shows read-only %s source and loads runs instead of deliveries', async (kind) => {
+    const script: ScheduleCatalogEntry = {
+      ...every, action: {
+        kind, summary: 'return 42', source: 'return 42', cwd: '/workspace',
+        sandboxCeiling: 'workspace-write', available: false,
+      }, report: 'on-failure',
+    }
+    const h = mount([script])
+    selectTask('Check metrics')
+    const detail = within(screen.getByRole('complementary'))
+    expect(detail.getByText('return 42')).toBeTruthy()
+    expect(detail.getByText('/workspace')).toBeTruthy()
+    expect(detail.getByText(en['action.unavailable'])).toBeTruthy()
+    expect(detail.queryByRole('textbox', { name: 'return 42' })).toBeNull()
+    await act(async () => { fireEvent.click(runButton()) })
+    expect(detail.getByText(en['run.started'])).toBeTruthy()
+    await act(async () => { fireEvent.click(detail.getByRole('tab', { name: en['detail.records'] })) })
+    expect(h.props.loadRuns).toHaveBeenCalled()
+    expect(h.props.loadHistory).not.toHaveBeenCalled()
+  })
+
+  it('withholds another manual run while a script is already running', () => {
+    mount([{
+      ...every, action: {
+        kind: 'command', summary: 'true', source: 'true', cwd: '/workspace',
+        sandboxCeiling: 'read-only', available: true,
+      }, report: 'never', running: { runId: 'run-active', startedAt: every.scheduledAt },
+    }])
+    selectTask('Check metrics')
+    expect(runButton().disabled).toBe(true)
+    expect(within(screen.getByRole('complementary')).getByRole('status').textContent).toBe(en['runs.running'])
+  })
+})
+
 const sessions: SessionListState = {
   ids: [at.sessionId, every.sessionId, daily.sessionId],
   byId: Object.fromEntries([at, every, daily].map(record => [record.sessionId, {
@@ -138,6 +173,9 @@ function mount(
         id, records: [], earlierRecordsUnavailable: false,
         earlierRecordsPruned: false, retention: { days: 30, records: 200 },
       },
+    })),
+    loadRuns: vi.fn<TaskManagerPageProps['loadRuns']>(async ({ id }) => ({
+      ok: true, value: { id, records: [], earlierRecordsPruned: false, retention: { days: 30, records: 200 } },
     })),
     t: makeTranslate(en),
   }
@@ -1045,15 +1083,15 @@ describe('TaskDetail immediate run', () => {
     expect(runButton().disabled).toBe(true)
   })
 
-  it('states the refusal a run settles with instead of delivering', async () => {
+  it.each(['session', 'running'] as const)('states the %s refusal a run settles with instead of delivering', async (code) => {
     const h = mount([every])
     selectTask('Check metrics')
-    vi.mocked(h.props.onRun).mockResolvedValueOnce({ ran: false, code: 'session' })
+    vi.mocked(h.props.onRun).mockResolvedValueOnce({ ran: false, code })
 
     await act(async () => { fireEvent.click(runButton()) })
 
     const detail = within(screen.getByRole('complementary'))
-    expect(detail.getByRole('alert').textContent).toBe(en['run.error.session'])
+    expect(detail.getByRole('alert').textContent).toBe(en[`run.error.${code}`])
     expect(runButton().disabled).toBe(false)
   })
 

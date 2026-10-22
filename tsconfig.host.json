@@ -381,6 +381,8 @@
     { "path": "./packages/goal/command-goal" },
     { "path": "./packages/feedback/command-feedback" },
     { "path": "./packages/schedule/schedule" },
+    { "path": "./packages/schedule/schedule-action-command" },
+    { "path": "./packages/schedule/schedule-action-program" },
     { "path": "./packages/schedule/tool-schedule" },
     { "path": "./packages/context/time-context" },
     { "path": "./packages/context/file-reference" },

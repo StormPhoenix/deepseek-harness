@@ -28,6 +28,8 @@ Choose this package for persistent reminder management.
 |---|---|
 | [`schedule/`](schedule/README.md) | Host-owned reminder persistence, scheduling, inspection, and explicit deletion |
 | [`tool-schedule/`](tool-schedule/README.md) | Preset-scoped `schedule_create`, `schedule_list`, `schedule_update`, and `schedule_delete` tools over the Host `ctx.schedule` service |
+| [`schedule-action-command/`](schedule-action-command/README.md) | Execute scheduled shell commands under the bound Session policy |
+| [`schedule-action-program/`](schedule-action-program/README.md) | Execute isolated programs without model or tool bindings |
 
 -----
 

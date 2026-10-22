@@ -42,7 +42,7 @@ import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-client-connection/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type {
-  ScheduleCatalogEntry, ScheduleDeliveryHistoryRequest, ScheduleId, ScheduleRunResult, ScheduleUpdateRequest,
+  ScheduleCatalogEntry, ScheduleDeliveryHistoryRequest, ScheduleId, ScheduleRunHistoryRequest, ScheduleRunResult, ScheduleUpdateRequest,
 } from '@deepseek-ai/dsh-schedule/client'
 import { createCatalogSource, type CatalogDeleteOutcome, type CatalogInjected } from './catalog-source.ts'
 import { createDeleteToastSource, ScheduleDeleteToast } from './DeleteToast.tsx'
@@ -74,6 +74,7 @@ const RUN_REFUSALS: Record<RunRefusalCode, ScheduleRunFailure> = {
   schedule_not_found: 'notFound',
   schedule_ended: 'ended',
   session_unavailable: 'session',
+  schedule_running: 'running',
 }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -144,6 +145,7 @@ export function apply(ctx: ClientContext): void {
     return result
   }
   const loadHistory = (request: ScheduleDeliveryHistoryRequest) => ctx.remote.schedule.history(request)
+  const loadRuns = (request: ScheduleRunHistoryRequest) => ctx.remote.schedule.runs(request)
   /**
    * Deliver one task's stored instruction once, through its original Session binding.
    *
@@ -177,6 +179,7 @@ export function apply(ctx: ClientContext): void {
     onRetry: manager.onRetry,
     onUpdateTiming: updateTask,
     loadHistory,
+    loadRuns,
     onOpenSession: openSession,
     onRun: runTask,
   }

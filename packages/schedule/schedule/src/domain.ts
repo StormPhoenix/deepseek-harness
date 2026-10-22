@@ -91,6 +91,8 @@ export class ScheduleInputError extends Error {
     | 'time_out_of_range'
     | 'frequency_too_high'
     | 'subagent_session'
+    | 'invalid_action'
+    | 'action_unavailable'
 
   /**
    * Construct a stable input failure.
@@ -107,7 +109,9 @@ export class ScheduleInputError extends Error {
       | 'not_future'
       | 'time_out_of_range'
       | 'frequency_too_high'
-      | 'subagent_session',
+      | 'subagent_session'
+      | 'invalid_action'
+      | 'action_unavailable',
     message: string,
     options?: ErrorOptions,
   ) {
@@ -1892,5 +1896,39 @@ export function renderRecurringReminderBatchFraming(
     '[SCHEDULE REMINDER BATCH]',
     SCHEDULED_MESSAGE_FRAMING,
     `reminders_json: ${JSON.stringify(payload)}`,
+  ].join('\n')
+}
+
+/**
+ * Render the fixed model framing for one script run result.
+ * @param record - Task record whose prompt frames the result.
+ * @param kind - Action provider kind that produced the run.
+ * @param run - Saved run outcome being delivered.
+ * @returns Stable model-visible text whose dynamic fields are JSON-escaped.
+ */
+export function renderRunResultFraming(
+  record: ScheduleRecord,
+  kind: string,
+  run: {
+    readonly scheduledAt: string
+    readonly manual?: true | undefined
+    readonly outcome: string
+    readonly exitCode?: number | null | undefined
+    readonly output: string
+    readonly outputTruncated: boolean
+  },
+): string {
+  return [
+    '[SCHEDULE RUN RESULT]',
+    'This is a scheduled task result from the user',
+    `schedule_id_json: ${JSON.stringify(record.id)}`,
+    `occurrence_at: ${run.scheduledAt}`,
+    ...run.manual === true ? ['manual_run: true'] : [],
+    `action_kind_json: ${JSON.stringify(kind)}`,
+    `outcome: ${run.outcome}`,
+    ...run.exitCode === undefined ? [] : [`exit_code: ${String(run.exitCode)}`],
+    `output_truncated: ${String(run.outputTruncated)}`,
+    `output_json: ${JSON.stringify(run.output)}`,
+    `reminder_prompt_json: ${JSON.stringify(record.prompt)}`,
   ].join('\n')
 }
