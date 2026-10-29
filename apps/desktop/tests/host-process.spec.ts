@@ -112,7 +112,7 @@ const ACTIVATION_HOST = HTTP_HOST.replace("  if (request.url === '/fatal') {", `
 function activationHost(source: string, activate?: () => void | Promise<void>, environment = process.env): DesktopHostProcess {
   const runtime = projectWithHost(source)
   const host = new DesktopHostProcess(process.execPath, runtime, runtime, undefined, environment,
-    undefined, undefined, undefined, undefined, activate)
+    undefined, undefined, undefined, undefined, undefined, activate)
   hosts.push(host)
   return host
 }

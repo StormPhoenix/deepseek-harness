@@ -2220,7 +2220,8 @@ describe('desktop main startup', () => {
     await expect(preparing).resolves.toBe(false)
     expect(harness.dialog.showMessageBox).not.toHaveBeenCalled()
     expect(host.stop).not.toHaveBeenCalled()
-    expect(window.listenerCount('leave-full-screen')).toBe(baseline.leave)
+    // The window pin releases its own fullscreen listener when the window closes.
+    expect(window.listenerCount('leave-full-screen')).toBe(baseline.leave - 1)
   })
 
   it('waits for Platform storage cleanup before the installer takes over', async () => {
