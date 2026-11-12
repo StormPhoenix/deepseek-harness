@@ -51,7 +51,10 @@ type DesktopHostEvent = ReadyEvent | FatalEvent | PlatformSessionEvent | {
 }
 
 /** Correlated answer to one shell control request. */
-type DesktopHostControlResponse = Extract<DesktopHostEvent, { readonly type: 'update-tasks' | 'quit-inspection' }>
+type DesktopHostControlResponse = Exclude<
+  Extract<DesktopHostEvent, { readonly requestId: number }>,
+  { readonly type: 'activate-window' }
+>
 
 /** What quitting now would affect, as reported by the Host. */
 export interface DesktopQuitInspection {
